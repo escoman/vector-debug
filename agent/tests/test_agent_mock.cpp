@@ -188,8 +188,10 @@ static void test_full_scenario()
 
     printf("  DebugAdapter + DebugBackend + AgentApi created\n");
 
-    // --- Reset in LOADROM mode (detaches boot ROM, PC=0) ---
-    backend.reset();
+    // --- Restart: detach boot ROM so RAM at 0x0000 is fetched by the CPU ---
+    // backend.reset() would ATTACH the boot ROM (BLK+ВВОД), shadowing our
+    // program; restart() detaches it (BLK+СБР semantics: PC=0, RAM visible).
+    backend.restart();
     backend.clearHistory();
     backend.clearActivityCounters();
 
@@ -363,8 +365,8 @@ static void test_full_scenario()
     // ===================================================================
     printf("\n  --- Phase 7: Breakpoint + run cycle ---\n");
 
-    // Reset to start
-    backend.reset();
+    // Reset to start (detached boot so the written program is executed)
+    backend.restart();
     writeProgram(adapter);
     backend.clearHistory();
     backend.clearActivityCounters();
@@ -399,7 +401,7 @@ static void test_full_scenario()
 
     // Step to function entry (PC should be at 0x0200 after Phase 7 breakpoint)
     // Reset and step through to reach the subroutine
-    backend.reset();
+    backend.restart();
     writeProgram(adapter);
     backend.clearHistory();
 

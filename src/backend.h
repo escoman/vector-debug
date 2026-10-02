@@ -315,8 +315,8 @@ public:
     // Legacy execution (used internally, not via IDebugBackend)
     void run();
     void pause();
-    void reset();
-    void restart();  // BLK+ВВОД: attach boot ROM, PC=0
+    void reset();      // БЛК+ВВОД: attach boot ROM, PC=0
+    void restart();    // БЛК+СБР: detach boot ROM, PC=0, execute from RAM
 
     // Helper: dual-mode command submission.
     // If emulation loop is running — enqueue and wait for result.

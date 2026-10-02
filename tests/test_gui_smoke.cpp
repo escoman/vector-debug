@@ -247,7 +247,8 @@ static void test_launchWithTestRom()
     }
 
     // Find a test ROM — look relative to the build directory
-    // Build dir is same as binary location; testroms/ is at project root
+    // Build dir is same as binary location; testroms/ now lives in the
+    // emulator submodule at vendor/v06c-emu/testroms
     char buf[4096];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (len <= 0) {
@@ -259,18 +260,18 @@ static void test_launchWithTestRom()
     if (slash) *(slash + 1) = '\0';
     std::string buildDir = buf;
 
-    // Navigate from build/ to project root: build/ is at debugger/build/
-    // so project root is ../../ from build dir
-    std::string romPath = buildDir + "../../testroms/clrs.rom";
+    // Navigate from build/ to the repo root, then into the emulator submodule:
+    // build/ is at <repo>/build/, so testroms is ../vendor/v06c-emu/testroms
+    std::string romPath = buildDir + "../vendor/v06c-emu/testroms/clrs.rom";
 
     // Verify ROM exists
     if (!fileExists(romPath)) {
-        // Try alternative: maybe build dir is at root
-        romPath = buildDir + "testroms/clrs.rom";
+        // Try alternative: maybe build dir is at repo root
+        romPath = buildDir + "vendor/v06c-emu/testroms/clrs.rom";
     }
     if (!fileExists(romPath)) {
-        // Try from debugger/build/ directly
-        romPath = buildDir + "../testroms/clrs.rom";
+        // Try one level deeper (e.g. nested build dir)
+        romPath = buildDir + "../../vendor/v06c-emu/testroms/clrs.rom";
     }
     if (!fileExists(romPath)) {
         FAIL("test ROM not found (tried multiple paths)");

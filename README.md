@@ -8,7 +8,7 @@
 
 - **DebugBackend** — библиотека для отладочной эмуляции: пошаговое выполнение, трассировка инструкций, контроль точек останова, дамп памяти.
 - **v06c-debugger** — графический интерфейс на базе Dear ImGui + SDL2 с панелью регистров, дизассемблером, историей инструкций, окном Vector Screen и кнопками управления (Step/Run/Pause/Reset).
-- **AI Agent API** — программный интерфейс для AI-агентов (LLM), предоставляющий 43+ метода отладки: память, регистры, точки останова, дизассемблер, трассировка, символы. Собирается по флагу `-DV06C_ENABLE_AI_AGENT=ON`.
+- **AI Agent API** — программный интерфейс для AI-агентов (LLM), предоставляющий 43+ метода отладки: память, регистры, точки останова, дизассемблер, трассировка, символы. Собирается по флагу `-DENABLE_AI_AGENT=ON`.
 - **v06c-mcp** — MCP-сервер (Model Context Protocol) для интеграции с AI-агентами через stdio-транспорт. 38 инструментов `debug_*`, тонкая обёртка над Agent API. Собирается вместе с AI Agent.
 - **test_backend** — набор автоматических тестов для проверки корректности работы бэкенда.
 
@@ -39,11 +39,11 @@ sudo dnf install gcc gcc-c++ cmake make boost-devel SDL2-devel mesa-libGL-devel
 
 ### Дополнительные зависимости
 
-Проект использует библиотеки из основного репозитория Vector-06C:
+Проект использует библиотеки из исходников эмулятора Vector-06C, которые подключены как git-подмодуль `vendor/v06c-emu` (форк `escoman/vector06sdl`, ветка `4write`):
 - `fast-filters/` — coredsp (для Resampler)
 - `coreutil/` — coreutil (для SIMD)
 
-Эти библиотеки поставляются с основным проектом и не требуют отдельной установки.
+Эти библиотеки приходят вместе с подмодулем `vendor/v06c-emu` и не требуют отдельной установки — достаточно `git submodule update --init`.
 
 ### Зависимости AI Agent (опционально)
 
@@ -56,7 +56,7 @@ sudo dnf install gcc gcc-c++ cmake make boost-devel SDL2-devel mesa-libGL-devel
 
 AI Agent и MCP-сервер собираются при включении флага:
 ```bash
-cmake .. -DV06C_ENABLE_AI_AGENT=ON
+cmake .. -DENABLE_AI_AGENT=ON
 ```
 
 ## Dear ImGui — ветка `docking`
@@ -71,10 +71,30 @@ cmake .. -DV06C_ENABLE_AI_AGENT=ON
 
 ## Сборка
 
-### 1. Клонировать Dear ImGui из ветки `docking` и imgui-node-editor
+### 0. Получение репозитория и подмодулей
+
+Эмулятор Vector-06C (`vendor/v06c-emu`) и cpp-mcp (`thirdparty/cpp-mcp`) подключены как git-подмодули. Клонируйте репозиторий сразу с ними:
 
 ```bash
-cd debugger
+git clone --recursive https://github.com/escoman/vector-debug.git
+cd vector-debug
+# если клонировали без --recursive:
+git submodule update --init --recursive
+```
+
+Подмодуль эмулятора закреплён за веткой `4write` форка `escoman/vector06sdl` — это единственная ветка, где в `src/` есть guard'ы `#ifdef V06C_DEBUGGER`, на которых держится отладчик.
+
+**Регламент сопровождения подмодулей:**
+- Правки в `src/` эмулятора (новые hooks под `#ifdef V06C_DEBUGGER`) вносятся только в форке эмулятора: `cd vendor/v06c-emu && git switch 4write`, коммит, push в форк — затем здесь делается commit-bump на новый коммит.
+- Обновление эмулятора: `pull` в `vendor/v06c-emu` → прогнать тесты → закоммитить bump указателя подмодуля.
+- `git submodule update` сам по себе не подтягивает upstream — смена коммита подмодуля это всегда осознанный коммит в этом репозитории.
+- Внутри `vendor/v06c-emu` никогда не коммитить на detached HEAD — сначала `git switch 4write`.
+
+### 1. Клонировать Dear ImGui из ветки `docking` и imgui-node-editor
+
+> Эти библиотеки не входят в подмодули и не отслеживаются git'ом (лежат в `thirdparty/`, игнорируемом `.gitignore`). Их нужно клонировать вручную перед сборкой GUI — выполнять из корня репозитория:
+
+```bash
 mkdir -p thirdparty
 git clone --branch docking https://github.com/ocornut/imgui.git thirdparty/imgui
 git clone --depth 1 https://github.com/thedmd/imgui-node-editor.git thirdparty/imgui-node-editor
@@ -106,7 +126,7 @@ make -j$(nproc)
 - `test_gui_smoke` — smoke-тест запуска GUI
 - `v06c-debugger` — графический отладчик
 
-**AI Agent (при `-DV06C_ENABLE_AI_AGENT=ON`):**
+**AI Agent (при `-DENABLE_AI_AGENT=ON`):**
 - `test_agent_api` — тесты API агента (77 тестов)
 - `test_agent_commands` — тесты команд агента (15 тестов)
 - `test_agent_mock` — тесты mock-бэкенда (49 тестов)
@@ -118,7 +138,7 @@ make -j$(nproc)
 ## Запуск тестов
 
 ```bash
-cd debugger/build
+cd build
 ./test_backend
 ```
 
@@ -145,7 +165,7 @@ cd debugger/build
 ## Запуск smoke-теста с реальным Board
 
 ```bash
-cd debugger/build
+cd build
 ./test_board_smoke
 ```
 
@@ -154,7 +174,7 @@ cd debugger/build
 ## Запуск smoke-теста GUI
 
 ```bash
-cd debugger/build
+cd build
 ./test_gui_smoke
 ```
 
@@ -163,19 +183,19 @@ cd debugger/build
 ## Запуск отладчика
 
 ```bash
-cd debugger/build
+cd build
 
 # Без ROM — загрузится встроенный бут-ПЗУ Вектора
 ./v06c-debugger
 
 # ROM-файл (загружается с адреса 0x0100, после таблицы векторов прерываний)
-./v06c-debugger ../../testroms/clrs.rom
+./v06c-debugger ../vendor/v06c-emu/testroms/clrs.rom
 
 # R0M-файл (загружается с адреса 0x0000, сырой образ памяти)
-./v06c-debugger ../../testroms/image.r0m
+./v06c-debugger ../vendor/v06c-emu/testroms/image.r0m
 
 # С явным указанием адреса загрузки (переопределяет автоопределение)
-./v06c-debugger ../../testroms/custom.bin 0x8000
+./v06c-debugger ../vendor/v06c-emu/testroms/custom.bin 0x8000
 ```
 
 **Правила загрузки ROM-файлов:**
@@ -188,13 +208,13 @@ cd debugger/build
 MCP-сервер (`v06c-mcp`) работает через stdio-транспорт и предоставляет 38 инструментов `debug_*` для AI-агентов.
 
 ```bash
-cd debugger/build
+cd build
 
 # Запуск MCP-сервера (общение через stdin/stdout в формате JSON-RPC 2.0)
 ./v06c-mcp
 
 # С загрузкой ROM-файла
-./v06c-mcp ../../testroms/clrs.rom
+./v06c-mcp ../vendor/v06c-emu/testroms/clrs.rom
 ```
 
 Пример запроса (JSON-RPC 2.0):
@@ -256,8 +276,8 @@ python3 agent/tests/validate_agent_knowledge.py
 ## Структура каталогов
 
 ```
-debugger/
-├── src/            # DebugBackend, дизассемблер, события
+vector-debug/
+├── src/            # DebugBackend, дизассемблер, события (ядро отладчика)
 ├── gui/            # Графический интерфейс (ImGui + SDL2)
 ├── agent/          # AI Agent API (IDebugBackend, AgentApi, типы)
 │   ├── tasks/      # Task Library — методики анализа ROM
@@ -265,6 +285,9 @@ debugger/
 │   └── profiles/   # Profiles — типовые наборы задач и знаний
 ├── mcp/            # MCP-сервер v06c-mcp (адаптер над Agent API)
 ├── tests/          # Автоматические тесты
-├── thirdparty/     # Сторонние библиотеки (Dear ImGui, imgui-node-editor, cpp-mcp)
+├── thirdparty/     # Сторонние библиотеки (cpp-mcp — submodule; imgui и др. — вручную)
+├── vendor/
+│   └── v06c-emu/   # Submodule: исходники эмулятора Vector-06C (ветка 4write)
+├── scripts/        # make_release.sh и вспомогательные скрипты сборки
 └── CMakeLists.txt  # Конфигурация сборки
 ```

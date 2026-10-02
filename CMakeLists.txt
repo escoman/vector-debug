@@ -13,8 +13,10 @@ add_definitions(-DV06C_DEBUGGER=1)
 # Paths
 # ---------------------------------------------------------------------------
 
-set(ROOT_DIR    ${CMAKE_CURRENT_SOURCE_DIR}/..)
-set(SRC_DIR     ${ROOT_DIR}/src)
+set(V06C_EMU_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/v06c-emu" CACHE PATH
+    "Path to Vector-06C emulator sources (git submodule)")
+set(ROOT_DIR ${V06C_EMU_DIR})
+set(SRC_DIR  ${ROOT_DIR}/src)
 set(DBG_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(DBG_TST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 set(DBG_GUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gui)

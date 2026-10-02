@@ -10,6 +10,8 @@
 # Produces release/vector-debug-<version>-<platform>-<arch>/{binaries,workspaces/Default.ini,...}
 # and its archive (.tar.gz on linux, .zip on windows). The tuned workspace preset
 # is always shipped so the debugger starts with the docking layout out of the box.
+# On linux a relocatable v06c-debugger.desktop launcher (+ icon) is bundled for
+# desktop integration. README.md is intentionally NOT shipped (build-oriented).
 #
 # Shared by local `make release` (linux) and CI (both platforms) — one packaging
 # logic for every path.
@@ -40,9 +42,19 @@ mkdir -p "$STAGE/workspaces"
 
 cp "$DEBUGGER" "$MCP" "$STAGE/"
 
-# Ship the tuned workspace preset (tracked at repo-root workspaces/) and README.
+# Ship the tuned workspace preset (tracked at repo-root workspaces/).
 [ -f "$ROOT/workspaces/Default.ini" ] && cp "$ROOT/workspaces/Default.ini" "$STAGE/workspaces/" || true
-[ -f "$ROOT/README.md" ] && cp "$ROOT/README.md" "$STAGE/" || true
+
+# Linux: bundle a relocatable .desktop launcher + icon. The build-time CMake
+# version embeds absolute /build paths; rewrite Exec to resolve against the
+# .desktop file itself (%k field code) and use a theme Icon name instead of an
+# absolute path, so the extracted tarball works from any location.
+if [ "$PLATFORM" = "linux" ] && [ -f "$ROOT/res/v06c-debugger.desktop.in" ]; then
+  sed -e 's#@CMAKE_CURRENT_BINARY_DIR@#"$(dirname "%k")"#' \
+      -e 's#^Icon=@CMAKE_CURRENT_SOURCE_DIR@/res/icon64.png#Icon=v06c-debugger#' \
+      "$ROOT/res/v06c-debugger.desktop.in" > "$STAGE/v06c-debugger.desktop"
+  [ -f "$ROOT/res/icon64.png" ] && cp "$ROOT/res/icon64.png" "$STAGE/icon64.png" || true
+fi
 
 # Windows: bundle the MinGW/SDL2 runtime DLLs next to the executables so the
 # self-contained folder runs without a package manager. Best-effort by design.

@@ -545,6 +545,28 @@ set(BINARY_RESOURCES
 )
 
 # ---------------------------------------------------------------------------
+# Workspace presets
+#
+# The GUI reads/writes window layouts in <cwd>/workspaces/*.ini, relative to
+# where v06c-debugger runs (the build dir). The tuned Default layout is kept as
+# a tracked source asset under the top-level workspaces/ dir and seeded into the
+# build dir at configure time — ONLY when absent, so the user's live tweaks in
+# build/workspaces/ survive reconfigures (build/ itself stays gitignored).
+# To promote an edited layout back into the repo, copy build/workspaces/*.ini to
+# the top-level workspaces/ and commit.
+# ---------------------------------------------------------------------------
+file(GLOB WORKSPACE_PRESET_SEEDS ${CMAKE_CURRENT_SOURCE_DIR}/workspaces/*.ini)
+if(WORKSPACE_PRESET_SEEDS)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/workspaces)
+    foreach(_ws ${WORKSPACE_PRESET_SEEDS})
+        get_filename_component(_wsname ${_ws} NAME)
+        if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/workspaces/${_wsname})
+            file(COPY ${_ws} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/workspaces)
+        endif()
+    endforeach()
+endif()
+
+# ---------------------------------------------------------------------------
 # Sound Window test executable
 #
 # Part A: pure SoundWindow::analyzeSnapshot / channel-order tests (ImGui

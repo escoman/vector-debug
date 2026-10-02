@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]           # релиз публикуется по тегу вида v0.1.0
+  workflow_dispatch:        # ручной dry-run: сборка + артефакты, без публикации
+    inputs:
+      version:
+        description: "Версия для имени артефакта (напр. 1.0.0)"
+        default: "1.0.0"
+
+permissions:
+  contents: write           # нужно для создания GitHub Release (GITHUB_TOKEN)
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: windows
+            # Windows-сборка ещё не портирована под MinGW — джоба может упасть;
+            # continue-on-error позволяет dry-run дойти до загрузки linux-артефакта
+            # и при этом показать лог ошибки Windows.
+            allow_failure: true
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ !!matrix.allow_failure }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # приносим vendor/v06c-emu, thirdparty/cpp-mcp и workspaces/
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            echo "v=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "v=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Linux toolchain & dependencies ---
+      - name: Install deps (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y \
+             build-essential cmake libboost-all-dev libsdl2-dev libgl-dev zip
+
+      - name: Build (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          cmake -S . -B build -DENABLE_AI_AGENT=ON
+          cmake --build build --target v06c-debugger v06c-mcp -j"$(nproc)"
+
+      # --- Windows toolchain (MSYS2 / MinGW-w64) — НЕ портировано, для наблюдения ---
+      - name: Set up MSYS2 (MinGW-w64)
+        if: matrix.platform == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-boost mingw-w64-x86_64-sdl2
+            mingw-w64-x86_64-nlohmann-json mingw-w64-x86_64-binutils
+            make zip
+
+      - name: Build (Windows / MinGW)
+        if: matrix.platform == 'windows'
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G "MinGW Makefiles" -DENABLE_AI_AGENT=ON
+          cmake --build build --target v06c-debugger v06c-mcp -j"$(nproc)"
+
+      - name: Package
+        shell: bash
+        run: bash scripts/package_release.sh "${{ matrix.platform }}" "${{ steps.ver.outputs.v }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: v06c-${{ matrix.platform }}-${{ steps.ver.outputs.v }}
+          path: |
+            release/*.tar.gz
+            release/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "v06c-*"
+          path: dist
+          merge-multiple: true
+
+      - name: Build release notes from CHANGELOG
+        # top-most version section -> release body (drops the redundant heading)
+        run: awk '/^## \[/{c++; if(c==2) exit} c==1{print}' CHANGELOG.md | sed '1d' > release_body.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: release_body.md
+          generate_release_notes: true

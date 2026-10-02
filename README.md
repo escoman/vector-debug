@@ -137,6 +137,29 @@ make -j$(nproc)
 - `test_mcp_protocol` — тесты MCP-протокола (37 тестов)
 - `v06c-mcp` — MCP-сервер для AI-агентов (stdio-транспорт)
 
+## Выпуск релизов
+
+Готовые релизы собираются в CI (`.github/workflows/release.yml`) на две платформы — **Linux** и **Windows**. Сборка идёт на серверах GitHub (раннеры `ubuntu-latest` и `windows-latest`), каждая платформа нативно, без кросс-компиляции.
+
+**Локально (только Linux-бандл):**
+```bash
+make release    # собирает и упаковывает release/vector-debug-<версия>-linux-x86_64.tar.gz
+```
+артефакты в `release/` не коммитятся (в `.gitignore`).
+
+**Как выпустить релиз через CI:**
+```bash
+git tag v0.1.0
+git push origin v0.1.0    # workflow соберёт linux+windows и опубликует GitHub Release
+```
+Для dry-run без публикации — запуск вручную: Actions → Release → Run workflow.
+
+**Release notes** по умолчанию генерируются GitHub'ом из PR/коммитов (`generate_release_notes`). Подробные человекочитаемые заметки ведём в [CHANGELOG.md](CHANGELOG.md) (формат Keep a Changelog).
+
+**Состав каждого бандла:** `v06c-debugger`, `v06c-mcp` и tuned-пресет `workspaces/Default.ini` (раскладка окон «из коробки»). На Windows рядом кладутся рантайм-DLL (SDL2 и др.). Упаковку выполняет `scripts/package_release.sh` — одна логика для локальной сборки и CI.
+
+> ⚠️ Windows-сборка пока **не портирована**: CMake заточен под Linux (`objcopy -O elf64`, `-pthread`, поиск SDL2/Boost/OpenGL). Windows-джоба в CI оставлена с `continue-on-error`, чтобы по dry-run было видно, что именно падает. Портирование CMake под MinGW — отдельный следующий шаг.
+
 ## Запуск тестов
 
 ```bash

@@ -1,6 +1,9 @@
 # Build artifacts (repo root is now the former debugger/)
 /build/
 
+# Release packaging output (built by `make release` / CI, published as GitHub Release assets)
+/release/
+
 # Third-party libraries. cpp-mcp is a git submodule (tracked via .gitmodules),
 # stb_image.h is tracked explicitly; Dear ImGui / imgui-node-editor / nlohmann
 # are vendored manually and stay untracked.

@@ -234,7 +234,6 @@ void DebuggerGui::refreshAfterReset()
     functionsWindow_.requestRefresh();
     romDatabaseWindow_.requestRefresh();
     xrefsWindow_.requestRefresh();
-    callGraphWindow_.markOutdated();
     histNeedsRefresh_ = true;
 }
 
@@ -453,10 +452,6 @@ void DebuggerGui::render(IDebugBackend &backend)
     vectorScreen_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     vectorScreen_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
 
-    // Stage 6.12: Call Graph navigation callbacks
-    callGraphWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
-    callGraphWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
-    
     // --- Apply cascade layout BEFORE rendering windows ---
     if (cascadeRequested_) {
         applyCascade();
@@ -475,7 +470,6 @@ void DebuggerGui::render(IDebugBackend &backend)
     functionsWindow_.render(backend);
     romDatabaseWindow_.render(backend);
     xrefsWindow_.render(backend);
-    callGraphWindow_.render(backend);
     searchWindow_.render(backend);
     keyboardWindow_.render(backend);
     // A virtual ВВОД/СБР key resets the machine — same follow-up as the
@@ -505,7 +499,6 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"MAP-file Info", &functionsWindow_.getVisibleRef()},
             {"ROM Database", &romDatabaseWindow_.getVisibleRef()},
             {"Cross References", &xrefsWindow_.getVisibleRef()},
-            {"Call Graph", &callGraphWindow_.getVisibleRef()},
             {"Search", &searchWindow_.getVisibleRef()},
             {"Keyboard", &keyboardWindow_.getVisibleRef()},
             {"Sound", &soundWindow_.getVisibleRef()},
@@ -837,7 +830,6 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("MAP-file Info", nullptr, &functionsWindow_.getVisibleRef());
             ImGui::MenuItem("ROM Database", nullptr, &romDatabaseWindow_.getVisibleRef());
             ImGui::MenuItem("Cross References", nullptr, &xrefsWindow_.getVisibleRef());
-            ImGui::MenuItem("Call Graph", nullptr, &callGraphWindow_.getVisibleRef());
             ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
             ImGui::MenuItem("Keyboard", nullptr, &keyboardWindow_.getVisibleRef());
             ImGui::MenuItem("Sound", nullptr, &soundWindow_.getVisibleRef());
@@ -918,7 +910,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        callGraphWindow_.markOutdated();
         histNeedsRefresh_ = true;
     }
     if (!paused) ImGui::EndDisabled();
@@ -944,7 +935,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        callGraphWindow_.markOutdated();
         histNeedsRefresh_ = true;
     }
     if (!paused) ImGui::EndDisabled();
@@ -962,7 +952,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        callGraphWindow_.markOutdated();
         histNeedsRefresh_ = true;
     }
     if (!running) ImGui::EndDisabled();
@@ -1018,7 +1007,6 @@ void DebuggerGui::layoutCascade()
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
         {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
-        {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
@@ -1057,7 +1045,6 @@ void DebuggerGui::applyCascade()
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
         {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
-        {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
@@ -1101,7 +1088,6 @@ void DebuggerGui::layoutTile()
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
         {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
-        {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
@@ -1220,7 +1206,6 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         romDatabaseWindow_.requestRefresh();
-        callGraphWindow_.onRomLoaded(backend);
         histNeedsRefresh_ = true;
     } else {
         snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),

@@ -48,10 +48,7 @@ sudo dnf install gcc gcc-c++ cmake make boost-devel SDL2-devel mesa-libGL-devel
 ### Зависимости AI Agent (опционально)
 
 Для сборки AI Agent и MCP-сервера дополнительно требуется:
-- **nlohmann/json** — библиотека JSON для C++. Устанавливается через `apt`:
-  ```bash
-  sudo apt-get install nlohmann-json3-dev
-  ```
+- **nlohmann/json** — библиотека JSON для C++. Вендорится заголовком `thirdparty/nlohmann/json.hpp` (отслеживается git'ом), отдельная установка не требуется.
 - **cpp-mcp** — MCP SDK (подмодуль в `thirdparty/cpp-mcp/`, инициализируется автоматически через CMake).
 
 AI Agent и MCP-сервер собираются при включении флага:
@@ -67,7 +64,7 @@ cmake .. -DENABLE_AI_AGENT=ON
 - API докинга (`DockSpace`, `DockBuilderAddNode`, `DockBuilderSplitNode`, `DockBuilderDockWindow`, `ImGuiDockNodeFlags_PassthruCentralNode`, `ImGuiConfigFlags_DockingEnable`) отсутствует в релизных тегах master-ветки.
 - Эти функции доступны только в ветке `docking`, где докинг является штатным режимом.
 
-**Почему не включена в репозиторий:** Dear ImGui — сторонняя библиотека с собственным циклом releases. Чтобы не дублировать чужой код и иметь возможность обновляться, она подключается как git-клон.
+**Как подключена:** Dear ImGui закреплена как git-подмодуль `thirdparty/imgui` (апстрим `ocornut/imgui`) на коммит из ветки `docking`. Подтягивается автоматически через `git submodule update --init --recursive` — отдельно клонировать не нужно.
 
 ## Сборка
 
@@ -90,21 +87,7 @@ git submodule update --init --recursive
 - `git submodule update` сам по себе не подтягивает upstream — смена коммита подмодуля это всегда осознанный коммит в этом репозитории.
 - Внутри `vendor/v06c-emu` никогда не коммитить на detached HEAD — сначала `git switch 4write`.
 
-### 1. Клонировать Dear ImGui из ветки `docking` и imgui-node-editor
-
-> Эти библиотеки не входят в подмодули и не отслеживаются git'ом (лежат в `thirdparty/`, игнорируемом `.gitignore`). Их нужно клонировать вручную перед сборкой GUI — выполнять из корня репозитория:
-
-```bash
-mkdir -p thirdparty
-git clone --branch docking https://github.com/ocornut/imgui.git thirdparty/imgui
-git clone --depth 1 https://github.com/thedmd/imgui-node-editor.git thirdparty/imgui-node-editor
-```
-
-> **Примечание:** `--branch docking` клонирует только нужную ветку. Флаг `--depth 1` можно добавить для ускорения, если полная история не нужна.
-
-**imgui-node-editor** — библиотека визуальных node-графов на базе Dear ImGui. Используется в окне Call Graph (Stage 6.12) для отображения графа вызовов из RDB. Поставляется как исходные файлы (copy-paste integration, аналогично Dear ImGui).
-
-### 2. Конфигурация и сборка
+### 1. Конфигурация и сборка
 
 ```bash
 mkdir build && cd build
@@ -124,7 +107,6 @@ make -j$(nproc)
 - `test_board_smoke` — smoke-тест с реальным Board (1 тест)
 - `test_vram_mapping` — тесты маппинга видеопамяти (17 тестов)
 - `test_workspace` — тесты менеджера рабочих пространств
-- `test_call_graph_model` — тесты модели графа вызовов (19 тестов)
 - `test_gui_smoke` — smoke-тест запуска GUI
 - `v06c-debugger` — графический отладчик
 
@@ -310,7 +292,7 @@ vector-debug/
 │   └── profiles/   # Profiles — типовые наборы задач и знаний
 ├── mcp/            # MCP-сервер v06c-mcp (адаптер над Agent API)
 ├── tests/          # Автоматические тесты
-├── thirdparty/     # Сторонние библиотеки (cpp-mcp — submodule; imgui и др. — вручную)
+├── thirdparty/     # cpp-mcp, imgui — submodule; stb_image.h, nlohmann/ — tracked headers
 ├── vendor/
 │   └── v06c-emu/   # Submodule: исходники эмулятора Vector-06C (ветка 4write)
 ├── scripts/        # make_release.sh и вспомогательные скрипты сборки

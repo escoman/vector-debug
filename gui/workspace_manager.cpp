@@ -619,7 +619,6 @@ void WorkspaceManager::buildDefaultLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
     ImGui::DockBuilderDockWindow("Functions", centerTop);
     ImGui::DockBuilderDockWindow("Cross References", centerTop);
-    ImGui::DockBuilderDockWindow("Call Graph", centerTop);
     ImGui::DockBuilderDockWindow("Search", rightTop);
     ImGui::DockBuilderDockWindow("Keyboard", leftBottom);
 }
@@ -659,7 +658,6 @@ void WorkspaceManager::buildScreenAnalysisLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
     ImGui::DockBuilderDockWindow("Instruction History", leftBottom);
     ImGui::DockBuilderDockWindow("Cross References", leftTop);
-    ImGui::DockBuilderDockWindow("Call Graph", leftTop);
 }
 
 void WorkspaceManager::buildCpuAnalysisLayout(unsigned int dockspaceId)
@@ -685,7 +683,6 @@ void WorkspaceManager::buildCpuAnalysisLayout(unsigned int dockspaceId)
     // Center: Disassembly (large)
     ImGui::DockBuilderDockWindow("Disassembly", center);
     ImGui::DockBuilderDockWindow("Cross References", center);
-    ImGui::DockBuilderDockWindow("Call Graph", center);
 
     // Right: Execution Trace + Breakpoints
     ImGui::DockBuilderDockWindow("Execution Trace", rightTop);
@@ -731,7 +728,6 @@ void WorkspaceManager::buildIoAnalysisLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("Breakpoints", bottomRight);
     ImGui::DockBuilderDockWindow("Instruction History", bottomLeft);
     ImGui::DockBuilderDockWindow("Cross References", topRight);
-    ImGui::DockBuilderDockWindow("Call Graph", topRight);
     ImGui::DockBuilderDockWindow("Search", bottomRight);
 }
 
@@ -770,5 +766,4 @@ void WorkspaceManager::buildMemoryAnalysisLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
     ImGui::DockBuilderDockWindow("Instruction History", leftBottom);
     ImGui::DockBuilderDockWindow("Cross References", rightTop);
-    ImGui::DockBuilderDockWindow("Call Graph", rightTop);
 }

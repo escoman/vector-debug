@@ -21,3 +21,7 @@ First public release of the Vector-06C debugger and its MCP server.
   packaging, and a GitHub Release published on `v*` tags.
 - `make release` — local Linux release packaging into `release/`.
 - Tuned workspace preset `workspaces/Default.ini` shipped in every release bundle.
+
+### Removed
+- GUI "Call Graph" window and the `imgui-node-editor` dependency. The call-graph
+  data remains available to AI agents via the MCP tool `debug_get_call_graph`.

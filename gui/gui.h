@@ -12,7 +12,6 @@
 #include "memory_access_window.h"
 #include "functions_window.h"
 #include "xrefs_window.h"
-#include "call_graph_window.h"
 #include "search_window.h"
 #include "keyboard_window.h"
 #include "rom_file_dialog.h"
@@ -130,9 +129,6 @@ private:
     
     // Xrefs window (Stage 4.7)
     XrefsWindow xrefsWindow_;
-    
-    // Call Graph window (Stage 4.7)
-    CallGraphWindow callGraphWindow_;
     
     // Search window (Stage 4.8)
     SearchWindow searchWindow_;

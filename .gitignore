@@ -4,9 +4,9 @@
 # Release packaging output (built by `make release` / CI, published as GitHub Release assets)
 /release/
 
-# Third-party libraries. cpp-mcp is a git submodule (tracked via .gitmodules),
-# stb_image.h is tracked explicitly; Dear ImGui / imgui-node-editor / nlohmann
-# are vendored manually and stay untracked.
+# Third-party libraries. cpp-mcp and imgui are git submodules (tracked via
+# .gitmodules). stb_image.h and nlohmann/json.hpp are tracked explicitly
+# (force-added past this rule). Everything else under thirdparty/ stays ignored.
 thirdparty/
 
 # IDE / agent workspace config (machine-specific: absolute paths, MCP wiring)

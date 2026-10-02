@@ -5,3 +5,6 @@
 	path = vendor/v06c-emu
 	url = https://github.com/escoman/vector06sdl
 	branch = 4write
+[submodule "thirdparty/imgui"]
+	path = thirdparty/imgui
+	url = https://github.com/ocornut/imgui.git

@@ -67,7 +67,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-boost mingw-w64-x86_64-sdl2
+            mingw-w64-x86_64-boost mingw-w64-x86_64-SDL2
             mingw-w64-x86_64-nlohmann-json mingw-w64-x86_64-binutils
             make zip
 

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "vector-debugger": {
+      "command": "/home/alexey/Projects/vector-debugger/debugger/build/v06c-mcp"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+[submodule "thirdparty/cpp-mcp"]
+	path = thirdparty/cpp-mcp
+	url = https://github.com/hkr04/cpp-mcp.git
+[submodule "vendor/v06c-emu"]
+	path = vendor/v06c-emu
+	url = https://github.com/escoman/vector06sdl
+	branch = 4write

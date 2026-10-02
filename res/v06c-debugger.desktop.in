@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Vector-06C Debugger
+Comment=Interactive debugger for KR580VM80A (Intel 8080) emulator
+Exec=bash -c 'cd @CMAKE_CURRENT_BINARY_DIR@ && exec ./v06c-debugger %f'
+Icon=@CMAKE_CURRENT_SOURCE_DIR@/res/icon64.png
+Terminal=false
+Categories=Development;Debugger;
+StartupNotify=true
+StartupWMClass=v06c-debugger
+MimeType=application/octet-stream;

@@ -216,19 +216,29 @@ void DebugAdapter::init()
         }
 
         if (port == 0x08) {
-            // Timer control word (core: vio.h maps ~port&3==3 → write_cw)
+            // Timer control word (core: vio.h maps ~port&3==3 → write_cw).
+            // Emulator (8253.h write_cw): latch bits == 0 → CounterUnit::Latch()
+            // (a read-back command — the counter keeps running untouched);
+            // latch bits != 0 → SetMode(), which forces enabled=false. That is
+            // the ONLY way a running tone stops, so this is where the note is
+            // cancelled: it stays silent until the next divider load re-arms it.
             int ctr = (value >> 6) & 3;
             if (ctr < 3) {
                 int latch = (value >> 4) & 3;
                 int mode  = (value >> 1) & 7;
-                timerLatchModes_[ctr] = latch;
-                timerModes_[ctr] = mode;
-                timerWriteStates_[ctr] = 0;
+                if (latch != 0) {
+                    timerLatchModes_[ctr] = latch;
+                    timerModes_[ctr] = mode;
+                    timerWriteStates_[ctr] = 0;
+                    timerSounding_[ctr] = false;  // SetMode disables the counter
+                }
+                // latch == 0: read-back latch command — no mode/enable change.
             }
         } else if (port >= 0x09 && port <= 0x0B) {
             // Counter data ports: ~0x0B&3=0, ~0x0A&3=1, ~0x09&3=2
             int ctr = (~port) & 3;
             int latch = timerLatchModes_[ctr];
+            bool loadComplete = false;
             if (latch == 3) {
                 // LSB then MSB
                 if (timerWriteStates_[ctr] == 0) {
@@ -238,15 +248,27 @@ void DebugAdapter::init()
                     timerLoadValues_[ctr] = (static_cast<uint16_t>(value) << 8) | timerWriteLsb_[ctr];
                     timerWriteStates_[ctr] = 0;
                     timerDirty_[ctr] = true;  // complete write — mark dirty
+                    loadComplete = true;
                 }
             } else if (latch == 1) {
                 // LSB only
                 timerLoadValues_[ctr] = value;
                 timerDirty_[ctr] = true;
+                loadComplete = true;
             } else if (latch == 2) {
                 // MSB only
                 timerLoadValues_[ctr] = static_cast<uint16_t>(value) << 8;
                 timerDirty_[ctr] = true;
+                loadComplete = true;
+            }
+            // A completed divider load re-arms the counter (emulator: load=true
+            // → next Count() sets enabled=true). It only produces a sustained
+            // tone in square-wave mode 3 with a non-zero divider; mode 0 (the
+            // "silence" mode the ROMs use) and a zero divider leave the output
+            // static. The 8253 folds mode bits 111→3, hence the &3.
+            if (loadComplete) {
+                bool toneMode = (timerModes_[ctr] & 3) == 3;
+                timerSounding_[ctr] = toneMode && timerLoadValues_[ctr] != 0;
             }
         }
     };
@@ -607,11 +629,16 @@ SoundSnapshot DebugAdapter::soundSnapshot() const
     snap.ayDirty = ayDirty_;
     const_cast<DebugAdapter*>(this)->ayDirty_ = false;
 
-    // Populate i8253 timer channel state (tracked via io.onwrite callback)
+    // Populate i8253 timer channel state (tracked via io.onwrite callback).
+    // `sounding` is persistent tone-output state and is deliberately NOT
+    // cleared here: it stays true from the moment a note is loaded until the
+    // counter is reprogrammed, so the Sound window draws a sustained note like
+    // the AY tone channels. `dirty` remains a per-snapshot write event.
     for (int i = 0; i < 3; ++i) {
         snap.timerChannels[i].loadValue = timerLoadValues_[i];
         snap.timerChannels[i].mode      = timerModes_[i];
         snap.timerChannels[i].dirty     = timerDirty_[i];
+        snap.timerChannels[i].sounding  = timerSounding_[i];
         const_cast<DebugAdapter*>(this)->timerDirty_[i] = false;
     }
 

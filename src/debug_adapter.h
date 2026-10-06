@@ -160,6 +160,12 @@ private:
     int  timerModes_[3] = {};        // mode per counter (0-5)
     uint8_t timerWriteLsb_[3] = {};  // temp LSB storage per counter
     bool timerDirty_[3] = {};        // true if counter was written since last snapshot
+    // Persistent tone-output state per counter, mirroring the emulator's
+    // CounterUnit::enabled for mode 3 (8253.h): set when a divider load
+    // completes in square-wave mode, cleared when a mode-set control word
+    // reprograms the counter. Drives the sustained note bar in the Sound
+    // window; `timerDirty_` only marks the single frame a write happened.
+    bool timerSounding_[3] = {};     // true while counter generates a tone
 
     // AY write tracking (ports 0x14/0x15)
     bool ayDirty_ = false;           // true if AY was written since last snapshot

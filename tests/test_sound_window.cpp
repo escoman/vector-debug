@@ -178,11 +178,11 @@ static void test_timer_channels_not_swapped()
     s.registers[7] = 0xFF;           // AY off
     applyMixer(s);
     s.timerChannels[0].loadValue = 10000; // Ch1: 150 Hz
-    s.timerChannels[0].dirty = true;
+    s.timerChannels[0].sounding = true;
     s.timerChannels[1].loadValue = 1000;  // Ch2: 1500 Hz
-    s.timerChannels[1].dirty = true;
+    s.timerChannels[1].sounding = true;
     s.timerChannels[2].loadValue = 100;   // Ch3: 15 kHz
-    s.timerChannels[2].dirty = true;
+    s.timerChannels[2].sounding = true;
 
     SW::Analysis a = SW::analyzeSnapshot(s);
     CHECK(a.active[SW::CH_TIMER_BASE + 0], "i8253 Channel 1 active");
@@ -198,10 +198,10 @@ static void test_timer_channels_not_swapped()
     s2.registers[7] = 0xFF;
     applyMixer(s2);
     s2.timerChannels[1].loadValue = 500;
-    s2.timerChannels[1].dirty = true;
+    s2.timerChannels[1].sounding = true;
     SW::Analysis a2 = SW::analyzeSnapshot(s2);
     CHECK(!a2.active[1] && a2.active[2] && !a2.active[3],
-          "single-counter dirty maps to exactly one channel");
+          "single-counter sounding maps to exactly one channel");
 
     TEST_END();
 }
@@ -239,7 +239,7 @@ static void test_ay_disabled_others_unaffected()
     // AY: no register activity at all (amps zero, R7=0 means tone enabled but
     // with amp 0 the channels stay inactive)
     s.timerChannels[2].loadValue = 500;   // i8253 Channel 3
-    s.timerChannels[2].dirty = true;
+    s.timerChannels[2].sounding = true;
     s.standardNoise.togglesSinceLast = 40;
     s.standardNoise.toggleRateHz = 2400.0;
     s.standardNoise.dirty = true;
@@ -442,6 +442,10 @@ static void test_adapter_i8253_port_mapping(DebugAdapter &adapter)
           "Channel 3 ← port 0x09 (load 100)");
     CHECK_EQ(3, s.timerChannels[0].mode, "Channel 1 mode 3");
     CHECK_EQ(3, s.timerChannels[2].mode, "Channel 3 mode 3");
+    // All three counters got a mode-3 divider load → all sustained-sounding.
+    CHECK(s.timerChannels[0].sounding && s.timerChannels[1].sounding &&
+          s.timerChannels[2].sounding,
+          "mode-3 divider load makes all three counters sound");
     // Standard noise must be untouched by timer traffic
     CHECK_EQ(0, s.standardNoise.togglesSinceLast,
              "i8253 writes produce no PC0 toggles");
@@ -451,6 +455,74 @@ static void test_adapter_i8253_port_mapping(DebugAdapter &adapter)
     CHECK(!s.timerChannels[0].dirty && !s.timerChannels[1].dirty &&
           !s.timerChannels[2].dirty,
           "dirty flags cleared after snapshot (measurements per interval)");
+    // ... but `sounding` persists with no further writes — that is what keeps
+    // the note bar lit from start to cancel instead of flashing on the write.
+    CHECK(s.timerChannels[0].sounding && s.timerChannels[1].sounding &&
+          s.timerChannels[2].sounding,
+          "sounding persists across snapshots (sustained tone, not an event)");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Sustained tone: a VI53 counter sounds from the moment a mode-3 divider is
+// loaded until it is reprogrammed — the bar must stay lit for the whole note,
+// not just flash on the write frame. Mirrors the ROM's vi53_set_channel()
+// (cancel = control word only) and vi53_set_channel_m0() (cancel = mode 0 +
+// two zero bytes) helpers exercised by snd_backends.rom.
+// ---------------------------------------------------------------------------
+
+static void test_adapter_i8253_sustained_tone(DebugAdapter &adapter)
+{
+    TEST_BEGIN("DebugAdapter: i8253 tone sustains from note start until cancel");
+
+    takeSnapshot(adapter);   // consume
+
+    // Note start on counter 0 (Channel 1), exactly vi53_set_channel(0, 3409):
+    // control word 0x36 (ctr0, LSB+MSB, mode 3), then divider 3409 = 0x0D51
+    // (440 Hz). The control word alone disables; the completed load re-arms.
+    adapter.writeIoPort(0x08, 0x36);
+    adapter.writeIoPort(0x0B, 0x51);   // LSB
+    adapter.writeIoPort(0x0B, 0x0D);   // MSB → load complete
+
+    SoundSnapshot s = takeSnapshot(adapter);
+    CHECK(s.timerChannels[0].sounding, "Channel 1 sounding right after note start");
+    CHECK(s.timerChannels[0].dirty, "Channel 1 dirty on the write frame");
+    CHECK_EQ(3409, s.timerChannels[0].loadValue, "Channel 1 divider = 3409 (440 Hz)");
+
+    SoundWindow::Analysis a = SoundWindow::analyzeSnapshot(s);
+    CHECK(a.active[SoundWindow::CH_TIMER_BASE + 0], "bar active while the tone sounds");
+    CHECK(a.level[SoundWindow::CH_TIMER_BASE + 0] > 0.0f, "bar level > 0 while sounding");
+
+    // The note keeps sounding across snapshots with NO further writes: unlike
+    // `dirty` (cleared every snapshot), `sounding` is persistent state.
+    s = takeSnapshot(adapter);
+    CHECK(!s.timerChannels[0].dirty, "dirty cleared on the next snapshot");
+    CHECK(s.timerChannels[0].sounding, "tone still sounding with no new writes");
+    s = takeSnapshot(adapter);
+    CHECK(s.timerChannels[0].sounding, "tone sustains across many snapshots");
+
+    // Cancel variant A (music.c vi53_set_channel(0,0)): a mode-3 control word
+    // with NO data write reprograms the counter → SetMode disables it.
+    adapter.writeIoPort(0x08, 0x36);
+    s = takeSnapshot(adapter);
+    CHECK(!s.timerChannels[0].sounding, "a control word alone cancels the tone");
+    a = SoundWindow::analyzeSnapshot(s);
+    CHECK(!a.active[SoundWindow::CH_TIMER_BASE + 0], "bar goes dark after cancel");
+    CHECK(a.level[SoundWindow::CH_TIMER_BASE + 0] == 0.0f, "bar level 0 after cancel");
+
+    // Restart, then cancel variant B (sound.c vi53_set_channel_m0(0,0)):
+    // mode-0 control word + two zero data bytes → silence.
+    adapter.writeIoPort(0x08, 0x36);
+    adapter.writeIoPort(0x0B, 0x51);
+    adapter.writeIoPort(0x0B, 0x0D);
+    s = takeSnapshot(adapter);
+    CHECK(s.timerChannels[0].sounding, "tone restarted by a fresh mode-3 load");
+    adapter.writeIoPort(0x08, 0x30);   // ctr0, mode 0 (OUT=0, silence)
+    adapter.writeIoPort(0x0B, 0x00);
+    adapter.writeIoPort(0x0B, 0x00);
+    s = takeSnapshot(adapter);
+    CHECK(!s.timerChannels[0].sounding, "mode-0 + zero divider silences the tone");
 
     TEST_END();
 }
@@ -485,6 +557,7 @@ static void test_loadrom_silences_stuck_note(DebugAdapter &adapter)
     SoundSnapshot s = takeSnapshot(adapter);
     CHECK_EQ(3, s.timerChannels[0].mode, "before reload: ctr0 stuck in mode 3");
     CHECK_EQ(10000, s.timerChannels[0].loadValue, "before reload: ctr0 tone loaded");
+    CHECK(s.timerChannels[0].sounding, "before reload: ctr0 stuck note is sounding");
     CHECK_EQ(1, s.standardNoise.lastLevel, "before reload: tape-out level high");
 
     // --- Load ROM 2: must replay the boot ROM's port initialization.
@@ -503,6 +576,9 @@ static void test_loadrom_silences_stuck_note(DebugAdapter &adapter)
     CHECK_EQ(4, s.timerChannels[0].mode, "after reload: ctr0 out of square mode");
     CHECK_EQ(4, s.timerChannels[1].mode, "after reload: ctr1 out of square mode");
     CHECK_EQ(4, s.timerChannels[2].mode, "after reload: ctr2 out of square mode");
+    CHECK(!s.timerChannels[0].sounding && !s.timerChannels[1].sounding &&
+          !s.timerChannels[2].sounding,
+          "after reload: boot control words silenced every stuck note");
     CHECK_EQ(0, s.standardNoise.lastLevel, "after reload: tape-out silenced");
 
     // Latched port state readable through the I/O layer:
@@ -632,6 +708,7 @@ int main()
     test_adapter_bsr_semantics(adapter);
     test_adapter_ay_independent_from_standard_noise(adapter);
     test_adapter_i8253_port_mapping(adapter);
+    test_adapter_i8253_sustained_tone(adapter);
     test_loadrom_silences_stuck_note(adapter);
     test_loadrom_disables_inherited_interrupts(adapter);
     test_audio_output_gate(adapter);

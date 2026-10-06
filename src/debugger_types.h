@@ -84,6 +84,13 @@ struct TimerChannelState
     uint16_t loadValue = 0;   // last loaded counter value
     int      mode      = 0;   // counter mode (0-5)
     bool     dirty     = false; // true if written since last snapshot
+    // True while the counter is actively generating its square-wave tone:
+    // from the moment a non-zero divider is loaded in mode 3 until the counter
+    // is reprogrammed (a mode-set control word) or switched out of tone mode.
+    // Unlike `dirty` — a one-shot write event cleared on every snapshot — this
+    // is persistent state, so the Sound window can draw a sustained note from
+    // start to cancel, exactly like the AY tone channels.
+    bool     sounding  = false;
 };
 
 // Standard Vector noise channel — the 1-bit tape-out beeper

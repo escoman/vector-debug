@@ -120,11 +120,15 @@ SoundWindow::Analysis SoundWindow::analyzeSnapshot(const SoundSnapshot &snap)
         : 0.0f;
 
     // -----------------------------------------------------------------------
-    // 1-3. i8253 channels — activity from counter reloads (dirty flag),
-    // bar height from output frequency (existing model, unchanged).
+    // 1-3. i8253 channels — activity from the counter's SUSTAINED tone-output
+    // state (`sounding`), not the one-shot write flag (`dirty`). A VI53 counter
+    // keeps generating its square wave from the moment a divider is loaded
+    // (mode 3) until it is reprogrammed, so the bar stays lit for the whole
+    // note — from start to cancel — exactly like the AY tone channels below.
+    // Bar height still comes from the output frequency (unchanged model).
     // -----------------------------------------------------------------------
     for (int ch = 0; ch < 3; ++ch) {
-        bool active = snap.timerChannels[ch].dirty;
+        bool active = snap.timerChannels[ch].sounding;
         a.active[CH_TIMER_BASE + ch] = active;
         if (active) {
             uint16_t load = snap.timerChannels[ch].loadValue;

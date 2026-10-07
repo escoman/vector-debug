@@ -51,6 +51,7 @@ struct VoiceState {
     uint16_t lastLoad = 0; bool haveLast = false; // repeat-load collapsing
     int  openStart = -1;   // currently sounding note (frame), -1 = none
     int  openMidi  = -1;
+    double openHz  = 0.0;  // its measured frequency (glides work in cents)
 };
 
 // vio.h routes ~port&3 to the chip: 0x0B→ctr0, 0x0A→ctr1, 0x09→ctr2.
@@ -65,9 +66,11 @@ void closeNote(VoiceState &v, int vi, int frame, std::vector<NoteSegment> &out)
 {
     if (v.openStart < 0) return;
     int end = std::max(frame, v.openStart + 1); // never zero-length
-    out.push_back(NoteSegment{ vi, v.openStart, end, v.openMidi });
+    NoteSegment seg{ vi, v.openStart, end, v.openMidi, v.openHz, {} };
+    out.push_back(seg);
     v.openStart = -1;
     v.openMidi  = -1;
+    v.openHz    = 0.0;
 }
 
 } // namespace
@@ -125,6 +128,7 @@ std::vector<NoteSegment> vi53Segments(const std::vector<AudioPortEvent> &events,
 
         int midi = freqToMidi(static_cast<double>(cfg.timerHz) / value, cfg.a4Hz);
         if (midi < 0) continue;                        // out of SMF range
+        const double hz = static_cast<double>(cfg.timerHz) / value;
 
         // A data load without an intervening CW that changes the pitch ends
         // the old note where the new divider takes over (rare: ROMs always
@@ -140,11 +144,13 @@ std::vector<NoteSegment> vi53Segments(const std::vector<AudioPortEvent> &events,
         const int f = static_cast<int>(e.frame);
         if (v.openStart == f) {
             v.openMidi = midi;
+            v.openHz = hz;
             continue;
         }
         closeNote(v, vi, f, segs);
         v.openStart = f;
         v.openMidi  = midi;
+        v.openHz    = hz;
     }
 
     // A note still sounding when the capture stopped sustained until the grab
@@ -153,7 +159,7 @@ std::vector<NoteSegment> vi53Segments(const std::vector<AudioPortEvent> &events,
         VoiceState &v = voice[vi];
         if (v.openStart < 0) continue;
         int end = std::max(v.openStart + cfg.minNoteFrames, lastFrame);
-        segs.push_back(NoteSegment{ vi, v.openStart, end, v.openMidi });
+        segs.push_back(NoteSegment{ vi, v.openStart, end, v.openMidi, v.openHz, {} });
     }
 
     std::sort(segs.begin(), segs.end(), [](const NoteSegment &a, const NoteSegment &b) {
@@ -195,6 +201,56 @@ std::vector<NoteSegment> vi53Segments(const std::vector<AudioPortEvent> &events,
         return a.startFrame != b.startFrame ? a.startFrame < b.startFrame
                                             : a.voice < b.voice;
     });
+
+    // ------------------------------------------------------------------
+    // Optional: fold a staircase of quick small steps back into the slide it
+    // sounds like. One held note then carries pitch-bend points at the real
+    // measured frequencies, so an effect sweep stops being 30 separate notes.
+    // A run qualifies when its notes touch (no rest), are short and move by at
+    // most a couple of semitones at a time; anything else keeps the plain
+    // note-per-segment representation.
+    // ------------------------------------------------------------------
+    if (cfg.glideSweeps) {
+        std::vector<NoteSegment> glided;
+        glided.reserve(segs.size());
+
+        for (int vi = 0; vi < 3; ++vi) {
+            std::vector<const NoteSegment *> run;
+            auto flush = [&glided, &run, &cfg]() {
+                if (static_cast<int>(run.size()) < cfg.glideMinNotes) {
+                    for (const NoteSegment *s : run) glided.push_back(*s);
+                    run.clear();
+                    return;
+                }
+                NoteSegment held = *run.front();
+                held.endFrame = run.back()->endFrame;
+                const double base = held.hz > 0.0 ? held.hz : 1.0;
+                for (size_t k = 1; k < run.size(); ++k) {
+                    const double hz = run[k]->hz > 0.0 ? run[k]->hz : base;
+                    const int cents = static_cast<int>(
+                        std::lround(1200.0 * std::log2(hz / base)));
+                    held.bends.emplace_back(run[k]->startFrame, cents);
+                }
+                glided.push_back(held);
+                run.clear();
+            };
+
+            for (const auto &s : segs) {          // segs is sorted by startFrame
+                if (s.voice != vi) continue;
+                const bool stepOk =
+                    run.empty() ||
+                    (s.startFrame <= run.back()->endFrame &&
+                     std::abs(s.midiNote - run.back()->midiNote) <= cfg.glideMaxStep &&
+                     s.endFrame - s.startFrame <= cfg.glideMaxNoteFrames &&
+                     run.front()->endFrame - run.front()->startFrame <= cfg.glideMaxNoteFrames);
+                if (!stepOk) flush();
+                run.push_back(&s);
+            }
+            flush();
+        }
+        segs.swap(glided);
+    }
+
     return segs;
 }
 
@@ -326,6 +382,47 @@ std::vector<uint8_t> writeSmf(const std::vector<NoteSegment> &segments,
         prog.bytes = { static_cast<uint8_t>(0xC0 | (chIdx & 0x0F)), cfg.program };
         events.push_back(prog);
 
+        // A bend is meaningless without the range it is measured in: announce
+        // RPN 0 (pitch bend sensitivity) for this channel, then release the RPN
+        // so later data bytes are not read as a parameter change.
+        bool anyBend = false;
+        for (const NoteSegment *s : kv.second)
+            if (!s->bends.empty()) { anyBend = true; break; }
+        const int bendRange = std::max(1, cfg.glideBendRange);
+        if (anyBend) {
+            const uint8_t ch = static_cast<uint8_t>(0xB0 | (chIdx & 0x0F));
+            const uint8_t semis = static_cast<uint8_t>(bendRange);
+            for (const std::vector<uint8_t> &cc : {
+                     std::vector<uint8_t>{ ch, 0x65, 0x00 },
+                     std::vector<uint8_t>{ ch, 0x64, 0x00 },
+                     std::vector<uint8_t>{ ch, 0x06, semis },
+                     std::vector<uint8_t>{ ch, 0x20, 0x00 },
+                     std::vector<uint8_t>{ ch, 0x65, 0x7F },
+                     std::vector<uint8_t>{ ch, 0x64, 0x7F } }) {
+                TickEvent rpn;
+                rpn.tick = 0; rpn.order = -1;
+                rpn.bytes = cc;
+                events.push_back(rpn);
+            }
+        }
+
+        auto bendEvent = [chIdx, bendRange](uint32_t tick, int cents) {
+            // 14-bit bend: 0x2000 center, full scale = +/- glideBendRange
+            // semitones. Saturate rather than wrap: an out-of-range sweep must
+            // stay at the extreme instead of jumping to the other side.
+            double units = static_cast<double>(cents) / (100.0 * bendRange) * 8192.0;
+            int v = static_cast<int>(units);
+            if (v > 8191) v = 8191;
+            if (v < -8192) v = -8192;
+            int raw = 8192 + v;
+            TickEvent b;
+            b.tick = tick; b.order = 0;
+            b.bytes = { static_cast<uint8_t>(0xE0 | (chIdx & 0x0F)),
+                        static_cast<uint8_t>(raw & 0x7F),
+                        static_cast<uint8_t>((raw >> 7) & 0x7F) };
+            return b;
+        };
+
         for (const NoteSegment *s : kv.second) {
             TickEvent on;
             on.tick = static_cast<uint32_t>(s->startFrame - baseFrame) * cfg.ppq;
@@ -335,12 +432,24 @@ std::vector<uint8_t> writeSmf(const std::vector<NoteSegment> &segments,
                          static_cast<uint8_t>(cfg.velocity) };
             events.push_back(on);
 
+            for (const auto &bp : s->bends) {
+                const uint32_t t =
+                    static_cast<uint32_t>(bp.first - baseFrame) * cfg.ppq;
+                if (t < on.tick) continue;      // never bend before the note
+                events.push_back(bendEvent(t, bp.second));
+            }
+
             TickEvent off;
             off.tick = static_cast<uint32_t>(s->endFrame - baseFrame) * cfg.ppq;
             off.order = 0;
             off.bytes = { static_cast<uint8_t>(0x80 | (chIdx & 0x0F)),
                           static_cast<uint8_t>(s->midiNote), 0x00 };
             events.push_back(off);
+
+            // Release the bend with the note, otherwise the next one starts
+            // detuned by whatever the sweep ended on.
+            if (!s->bends.empty())
+                events.push_back(bendEvent(off.tick, 0));
         }
 
         std::vector<uint8_t> body;

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,19 @@ struct Config {
     int      minNoteFrames = 1;   // shortest emitted note
     int      velocity = 100;      // fixed — the VI53 has no amplitude
     uint8_t  program  = 0;        // MIDI program for every voice track
+
+    // Glide sweeps (experimental, off by default). A ROM that walks the
+    // divider one or two semitones at a time (ROTORS rotor/swoop effects)
+    // really sounds a continuous slide, but the frame grid can only hold one
+    // pitch per frame, so the plain reconstruction exports it as a staircase
+    // of short notes. When enabled, such a run is merged into ONE held note
+    // carrying MIDI pitch-bend events between its real measured frequencies.
+    bool glideSweeps    = false;
+    int  glideMaxStep   = 2;      // max semitone gap between consecutive notes
+    int  glideMinNotes  = 4;      // a run must be at least this long
+    int  glideMaxNoteFrames = 12; // steps must be this short (~0.25 s): longer
+                                  // notes carry the tune, so they stay separate
+    int  glideBendRange = 12;     // semitones of bend range announced via RPN
 };
 
 // One reconstructed note. Frames are indices on the capture grid; MIDI ticks
@@ -48,6 +62,13 @@ struct NoteSegment {
     int startFrame;
     int endFrame;
     int midiNote;     // 0..127
+    // Measured pitch of the note in Hz (0 when unknown). The rounded MIDI note
+    // loses the sub-semitone detail that a slide is made of, so the glide pass
+    // works on these frequencies instead.
+    double hz = 0.0;
+    // Pitch-bend points for a merged glide: (frame, cents relative to the
+    // frequency the note started on). Empty for ordinary notes.
+    std::vector<std::pair<int, int>> bends;
 };
 
 // Frequency → nearest MIDI note number (equal temperament).

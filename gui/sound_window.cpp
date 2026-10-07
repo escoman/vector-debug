@@ -269,11 +269,12 @@ static void sectionHeader(const char *title)
 // ---------------------------------------------------------------------------
 
 static void saveGrabbedMid(IDebugBackend &backend, std::string &status,
-                           const std::string &path)
+                           bool glideSweeps, const std::string &path)
 {
     const auto events = backend.audioGrabEvents();
     audiomidi::Config cfg;   // defaults = Vector-06C: 1.4976 MHz, 50 fps,
                              // one VBlank frame = one quarter note
+    cfg.glideSweeps = glideSweeps;   // experimental: slides instead of staircases
     const auto segs = audiomidi::vi53Segments(events, cfg);
     const auto smf  = audiomidi::writeSmf(segs, cfg, "Vector-06C VI53 grab");
 
@@ -281,7 +282,10 @@ static void saveGrabbedMid(IDebugBackend &backend, std::string &status,
     if (f && !smf.empty()) {
         f.write(reinterpret_cast<const char *>(smf.data()),
                 static_cast<std::streamsize>(smf.size()));
+        int glides = 0;
+        for (const auto &s : segs) if (!s.bends.empty()) glides++;
         status = "Saved " + std::to_string(segs.size()) + " notes";
+        if (glides > 0) status += " (" + std::to_string(glides) + " glides)";
     } else {
         status = "Save failed: " + path;
     }
@@ -326,11 +330,24 @@ void SoundWindow::render(IDebugBackend &backend)
         ImGui::SameLine();
         if (ImGui::Button("SAVE MID")) {
             IDebugBackend *be = &backend;   // backend outlives the dialog
-            midSaveDialog_.onFileSelected = [be, this](const std::string &path) {
-                saveGrabbedMid(*be, grabStatus_, path);
+            const bool glide = glideSweeps_;
+            midSaveDialog_.onFileSelected = [be, this, glide](const std::string &path) {
+                saveGrabbedMid(*be, grabStatus_, glide, path);
             };
             midSaveDialog_.showSave("", "Save MIDI File", {".mid"}, "v06c_sound.mid");
         }
+    }
+
+    // Experimental export variant. Fast small steps usually are a ROM's sound
+    // effect sweeping through the divider, but a legato melody run looks the
+    // same on the bus — hence opt-in, so a tune is never rewritten into a bend
+    // by surprise.
+    ImGui::Checkbox("Glide sweeps (pitch bend)", &glideSweeps_);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Merge runs of quick 1-2 semitone steps into one held note\n"
+            "with MIDI pitch-bend events instead of separate notes.\n"
+            "Helps effect sweeps; may smear a legato melody.");
     }
 
     // One-line grab status (event count, truncation warning, save result).

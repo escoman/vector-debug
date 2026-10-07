@@ -18,6 +18,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <unistd.h>
 
@@ -115,6 +116,10 @@ struct SmfParsed {
     int division = 0;
     std::vector<std::string> trackNames;
     std::vector<SmfNote> notes;
+    // Pitch bends (track, tick, -8192..8191) and control changes
+    // (track, tick, cc, value) — only the glide-sweep export produces them.
+    std::vector<std::tuple<int, uint32_t, int>> bends;
+    std::vector<std::tuple<int, uint32_t, int, int>> ccs;
 };
 
 static bool parseSmf(const std::vector<uint8_t> &d, SmfParsed &p)
@@ -174,6 +179,8 @@ static bool parseSmf(const std::vector<uint8_t> &d, SmfParsed &p)
                 i += 2;
                 if (kind == 0x90) p.notes.push_back({t, pos, d1, d2 > 0});
                 else if (kind == 0x80) p.notes.push_back({t, pos, d1, false});
+                else if (kind == 0xE0) p.bends.emplace_back(t, pos, int((d2 << 7) | d1) - 8192);
+                else if (kind == 0xB0) p.ccs.emplace_back(t, pos, int(d1), int(d2));
             }
         }
         off = end;
@@ -353,6 +360,86 @@ static void test_parser_subframe_modulation()
         CHECK_EQ(55, segs[1].midiNote, "second note pitch G3 (196 Hz)");
         CHECK_EQ(20, segs[1].endFrame, "and runs to the cancel");
     }
+    TEST_END();
+}
+
+static void test_glide_sweeps()
+{
+    TEST_BEGIN("audio_midi: glide sweeps — a small-step run becomes ONE bent note");
+    using namespace audiomidi;
+    // Six contiguous notes walking up one semitone at a time. To the ear that
+    // is a slide, to the frame grid it is six notes — the optional glide pass
+    // holds one note and bends through the frequencies it measured.
+    static const double hz[] = { 466.16, 493.88, 523.25, 554.37, 587.33, 622.25 };
+    std::vector<AudioPortEvent> ev;
+    auto add = [&ev](uint64_t f, uint8_t p, uint8_t v) { ev.push_back(AudioPortEvent{ f, p, v }); };
+    for (int i = 0; i < 6; ++i) {
+        const int div = static_cast<int>(1497600.0 / hz[i] + 0.5);
+        const uint64_t f = 10 + static_cast<uint64_t>(i) * 4;
+        if (i == 0) add(f, 0x08, 0x36);            // start counter 0 in mode 3
+        add(f, 0x0B, static_cast<uint8_t>(div & 0xFF));
+        add(f, 0x0B, static_cast<uint8_t>((div >> 8) & 0xFF));
+    }
+    add(34, 0x08, 0x30); add(34, 0x0B, 0x00); add(34, 0x0B, 0x00);   // cancel
+    // (cancel on frame 34 so every step lasts 4 frames — a note longer than
+    // Config::glideMaxNoteFrames would legitimately end the run)
+
+    Config plain;
+    Config g;  g.glideSweeps = true;
+    auto p = vi53Segments(ev, plain);
+    auto q = vi53Segments(ev, g);
+    CHECK_EQ(6, p.size(), "plain export keeps the staircase");
+    CHECK_EQ(1, q.size(), "glide export holds one note");
+    if (q.size() == 1) {
+        CHECK_EQ(10, q[0].startFrame, "held note starts on the first step");
+        CHECK_EQ(34, q[0].endFrame, "and ends on the cancel");
+        CHECK_EQ(70, q[0].midiNote, "pitched on the step it started from");
+        CHECK_EQ(5, q[0].bends.size(), "one bend point per further step");
+        if (q[0].bends.size() == 5) {
+            CHECK_EQ(14, q[0].bends[0].first, "bend lands on its own frame");
+            CHECK(q[0].bends[0].second > 90 && q[0].bends[0].second < 110,
+                  "first bend is one semitone up");
+            CHECK(q[0].bends[4].second > 490 && q[0].bends[4].second < 510,
+                  "last bend is five semitones up");
+        }
+    }
+
+    auto smf = writeSmf(q, g, "glided");
+    SmfParsed parsed;
+    CHECK(parseSmf(smf, parsed), "glide file parses");
+    CHECK_EQ(6, parsed.bends.size(),       // 5 steps + the release at note end
+             "file carries the bend points and a release");
+    if (parsed.bends.size() == 6) {
+        CHECK_EQ(0, std::get<2>(parsed.bends.back()),
+                 "bend returns to centre with the note-off");
+        // +498 cents on a ±12-semitone scale = 498/1200 * 8192 ≈ 3400 units
+        bool up = std::get<2>(parsed.bends[4]) > 3200 &&
+                  std::get<2>(parsed.bends[4]) < 3600;
+        CHECK(up, "bend value scales with the measured pitch");
+    }
+    bool rangeSet = false, rpnReleased = false;
+    for (const auto &cc : parsed.ccs) {
+        if (std::get<2>(cc) == 0x06 && std::get<3>(cc) == g.glideBendRange) rangeSet = true;
+        if (std::get<2>(cc) == 0x65 && std::get<3>(cc) == 0x7F) rpnReleased = true;
+    }
+    CHECK(rangeSet, "RPN 0 announces the bend range");
+    CHECK(rpnReleased, "RPN is released afterwards");
+
+    // A melody that leaps (RISEOUT's fourths) must not be swallowed.
+    std::vector<AudioPortEvent> leaps;
+    auto addL = [&leaps](uint64_t f, uint8_t p, uint8_t v) { leaps.push_back(AudioPortEvent{ f, p, v }); };
+    static const double leapHz[] = { 110.0, 164.81, 220.0, 164.81, 110.0 };  // A2 E3 A3 E3 A2
+    for (int i = 0; i < 5; ++i) {
+        const int div = static_cast<int>(1497600.0 / leapHz[i] + 0.5);
+        const uint64_t f = 10 + static_cast<uint64_t>(i) * 6;
+        if (i == 0) addL(f, 0x08, 0x36);
+        addL(f, 0x0B, static_cast<uint8_t>(div & 0xFF));
+        addL(f, 0x0B, static_cast<uint8_t>((div >> 8) & 0xFF));
+    }
+    auto lq = vi53Segments(leaps, g);
+    CHECK_EQ(5, lq.size(), "leaping melody stays five notes even with glide on");
+    for (const auto &s : lq)
+        if (!s.bends.empty()) { CHECK(false, "no bends on a leaping line"); break; }
     TEST_END();
 }
 
@@ -713,6 +800,7 @@ int main()
     test_parser_repeats_and_reopen();
     test_parser_mode_gating();
     test_parser_subframe_modulation();
+    test_glide_sweeps();
     test_parser_latch_schemes();
     test_parser_tail_and_latch_command();
     test_vlq();

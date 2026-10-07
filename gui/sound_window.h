@@ -72,6 +72,9 @@ private:
     // toggles it and turns the captured events into a .mid file.
     RomFileDialog midSaveDialog_;
     std::string grabStatus_;   // one-line result/status under the controls
+    // Experimental SAVE MID variant: sweep effects become one held note with
+    // pitch bends. Off by default — see the note in SoundWindow::render().
+    bool glideSweeps_ = false;
 
     // Sound log ring buffer
     // Channel order: Std Noise, i8253 1-3, AY Noise, AY A, AY B, AY C

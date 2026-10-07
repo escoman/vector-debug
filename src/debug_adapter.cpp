@@ -185,6 +185,24 @@ void DebugAdapter::init()
             rasterEvents_.push(ev);
         }
 
+        // GRAB AUDIO: record raw VI53 writes with the frame stamp for MIDI
+        // export. Chip-level ports only (0x08 CW, 0x0B/0x0A/0x09 counters);
+        // the offline parser in audio_midi.cpp re-decodes the protocol from
+        // these bytes, so the capture stays the ground truth of the bus.
+        if (audioGrabEnabled_.load(std::memory_order_relaxed) &&
+            port >= 0x08 && port <= 0x0B) {
+            std::lock_guard<std::mutex> lk(audioGrabMutex_);
+            if (audioGrabEvents_.size() < kAudioGrabCap) {
+                AudioPortEvent ev;
+                ev.frame = static_cast<uint64_t>(board.get_frame_no());
+                ev.port  = static_cast<uint8_t>(port);
+                ev.value = value;
+                audioGrabEvents_.push_back(ev);
+            } else {
+                audioGrabTruncated_ = true;
+            }
+        }
+
         // Track AY writes (ports 0x14 = data, 0x15 = latch).
         // AY activity must never touch the standard noise counter below.
         if (port == 0x14 || port == 0x15) {
@@ -675,6 +693,43 @@ void DebugAdapter::setMuted(bool muted)
     // active as well, see setAudioEmulationActive().
     audioMuted_ = muted;
     updateAudioPause();
+}
+
+// ---------------------------------------------------------------------------
+// Audio grab (Sound window "GRAB AUDIO" -> "SAVE MID")
+//
+// Enabling starts a fresh buffer; disabling keeps it for export. Writes come
+// from the emulation thread (io.onwrite), reads from the GUI thread — hence
+// the mutex. Copying the vector out is fine: a full grab is bounded by
+// kAudioGrabCap small PODs and happens once per SAVE MID click.
+// ---------------------------------------------------------------------------
+
+void DebugAdapter::setAudioGrabEnabled(bool enabled)
+{
+    if (enabled) {
+        std::lock_guard<std::mutex> lk(audioGrabMutex_);
+        audioGrabEvents_.clear();
+        audioGrabTruncated_ = false;
+    }
+    audioGrabEnabled_.store(enabled, std::memory_order_relaxed);
+}
+
+size_t DebugAdapter::audioGrabEventCount() const
+{
+    std::lock_guard<std::mutex> lk(audioGrabMutex_);
+    return audioGrabEvents_.size();
+}
+
+std::vector<AudioPortEvent> DebugAdapter::audioGrabEvents() const
+{
+    std::lock_guard<std::mutex> lk(audioGrabMutex_);
+    return audioGrabEvents_;
+}
+
+bool DebugAdapter::audioGrabOverflowed() const
+{
+    std::lock_guard<std::mutex> lk(audioGrabMutex_);
+    return audioGrabTruncated_;
 }
 
 void DebugAdapter::setAudioEmulationActive(bool active)

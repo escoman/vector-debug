@@ -164,6 +164,15 @@ public:
     virtual SoundSnapshot soundSnapshot() const = 0;
     virtual void setMuted(bool muted) = 0;
 
+    // -- Audio grab (Sound window "GRAB AUDIO" / "SAVE MID") ------------------
+    // Default no-ops: DebugBackend forwards these to the IDebugTarget.
+
+    virtual void setAudioGrabEnabled(bool enabled) { (void)enabled; }
+    virtual bool isAudioGrabEnabled() const { return false; }
+    virtual size_t audioGrabEventCount() const { return 0; }
+    virtual std::vector<AudioPortEvent> audioGrabEvents() const { return {}; }
+    virtual bool audioGrabOverflowed() const { return false; }
+
     // -- Activity -----------------------------------------------------------
 
     virtual ActivitySnapshot activitySnapshot() const = 0;

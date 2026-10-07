@@ -132,6 +132,22 @@ struct SoundSnapshot
 };
 
 // ---------------------------------------------------------------------------
+// Audio grab event (Sound window "GRAB AUDIO" -> "SAVE MID")
+//
+// One raw chip-level port write with the frame stamp taken at write time
+// (board frame counter — the same grid the emulator sound path runs on).
+// The frame number replaces the py reference's VBlank-breakpoint grid, so
+// durations are frame-exact and no CPU pausing is involved.
+// ---------------------------------------------------------------------------
+
+struct AudioPortEvent
+{
+    uint64_t frame = 0;   // board.get_frame_no() at the moment of the OUT
+    uint8_t  port  = 0;   // VI53 ports only: 0x08 CW, 0x0B/0x0A/0x09 counters
+    uint8_t  value = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Beam / raster state (Stage 6.27: racing-the-beam debugging)
 //
 // Produced exclusively by DebugAdapter (the only Vector-specific access point)

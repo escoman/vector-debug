@@ -1606,6 +1606,35 @@ void DebugBackend::setMuted(bool muted)
 }
 
 // ---------------------------------------------------------------------------
+// Audio grab (GRAB AUDIO / SAVE MID) — forwarded to the target
+// ---------------------------------------------------------------------------
+
+void DebugBackend::setAudioGrabEnabled(bool enabled)
+{
+    target_->setAudioGrabEnabled(enabled);
+}
+
+bool DebugBackend::isAudioGrabEnabled() const
+{
+    return target_->isAudioGrabEnabled();
+}
+
+size_t DebugBackend::audioGrabEventCount() const
+{
+    return target_->audioGrabEventCount();
+}
+
+std::vector<AudioPortEvent> DebugBackend::audioGrabEvents() const
+{
+    return target_->audioGrabEvents();
+}
+
+bool DebugBackend::audioGrabOverflowed() const
+{
+    return target_->audioGrabOverflowed();
+}
+
+// ---------------------------------------------------------------------------
 // Stage 4.2: Activity snapshot
 // ---------------------------------------------------------------------------
 

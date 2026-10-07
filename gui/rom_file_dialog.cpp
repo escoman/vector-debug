@@ -20,6 +20,7 @@ void RomFileDialog::show(const std::string &startDir,
                          const std::string &title,
                          const std::vector<std::string> &extensions)
 {
+    saveMode_ = false;
     title_ = title;
     extensions_ = extensions;
     if (startDir.empty()) {
@@ -45,6 +46,16 @@ void RomFileDialog::show(const std::string &startDir,
     filenameInput_[0] = '\0';
     needsRefresh_ = true;
     open_ = true;
+}
+
+void RomFileDialog::showSave(const std::string &startDir,
+                             const std::string &title,
+                             const std::vector<std::string> &extensions,
+                             const std::string &defaultFileName)
+{
+    show(startDir, title, extensions);   // resets filenameInput_ and open_
+    saveMode_ = true;
+    snprintf(filenameInput_, sizeof(filenameInput_), "%s", defaultFileName.c_str());
 }
 
 bool RomFileDialog::render()
@@ -81,7 +92,14 @@ bool RomFileDialog::render()
         ImGui::Spacing();
 
         // File list with columns: Name
-        ImGui::BeginChild("FileList", ImVec2(0, -40), true, ImGuiWindowFlags_None);
+        //
+        // The modal is opened with NoScrollbar, so anything pushed below the
+        // window's bottom edge is unreachable, not just hidden. One row lives
+        // under the list (filename + buttons), so reserve its real height
+        // instead of a guessed constant.
+        const float bottomRow = ImGui::GetFrameHeight() +
+                                ImGui::GetStyle().ItemSpacing.y * 2.0f;
+        ImGui::BeginChild("FileList", ImVec2(0, -bottomRow), true, ImGuiWindowFlags_None);
 
         // Header
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%-40s  %s", "Name", "Type");
@@ -129,32 +147,53 @@ bool RomFileDialog::render()
 
         ImGui::EndChild();
 
-        // Filename input
+        // Filename + action buttons on ONE line. The input must not take the
+        // whole content width: ImGui::SameLine() does not wrap, so a full-width
+        // field would push the buttons off the right edge of the window (that
+        // is why the dialog used to be operable only by double-click).
+        const char *acceptLabel = saveMode_ ? "Save" : "Open";
+        float buttonsWidth =
+            ImGui::CalcTextSize(acceptLabel).x + ImGui::CalcTextSize("Cancel").x +
+            ImGui::GetStyle().FramePadding.x * 4.0f +
+            ImGui::GetStyle().ItemSpacing.x * 3.0f + 8.0f;
+
         ImGui::Text("File:");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##filename", filenameInput_, sizeof(filenameInput_));
+        ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - buttonsWidth));
+        const bool nameEntered = ImGui::InputText("##filename", filenameInput_,
+                                                   sizeof(filenameInput_),
+                                                   saveMode_ ? ImGuiInputTextFlags_EnterReturnsTrue
+                                                             : ImGuiInputTextFlags_None);
 
-        // Buttons
+        // Buttons share the line with the filename field (see the width math
+        // above), which is what keeps them inside the non-scrolling modal.
         ImGui::SameLine();
-        if (ImGui::Button("Open") || fileSelected) {
-            // Build full path
-            std::string fullPath;
-            if (filenameInput_[0] == '/') {
-                // Absolute path
-                fullPath = filenameInput_;
-            } else {
-                fullPath = currentPath_;
-                if (fullPath.back() != '/') fullPath += '/';
-                fullPath += filenameInput_;
+        if (ImGui::Button(acceptLabel) ||
+            (fileSelected && !saveMode_) || (saveMode_ && nameEntered)) {
+            // Save mode needs a name; an empty field keeps the dialog open.
+            if (!(saveMode_ && filenameInput_[0] == '\0')) {
+                // Build full path
+                std::string fullPath;
+                if (filenameInput_[0] == '/') {
+                    // Absolute path
+                    fullPath = filenameInput_;
+                } else {
+                    fullPath = currentPath_;
+                    if (fullPath.back() != '/') fullPath += '/';
+                    fullPath += filenameInput_;
+                }
+                // Save mode: append the default extension when the name has none.
+                if (saveMode_ && !matchesExtensions(fullPath) && !extensions_.empty()) {
+                    fullPath += extensions_.front();
+                }
+                selectedPath_ = fullPath;
+                if (onFileSelected) {
+                    onFileSelected(selectedPath_);
+                }
+                open_ = false;
+                ImGui::EndPopup();
+                return true;
             }
-            selectedPath_ = fullPath;
-            if (onFileSelected) {
-                onFileSelected(selectedPath_);
-            }
-            open_ = false;
-            ImGui::EndPopup();
-            return true;
         }
 
         ImGui::SameLine();

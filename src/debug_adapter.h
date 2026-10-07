@@ -17,6 +17,8 @@
 #include <set>
 #include <atomic>
 #include <chrono>
+#include <mutex>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // DebugAdapter
@@ -72,6 +74,13 @@ public:
     SoundSnapshot soundSnapshot() const override;
     void setMuted(bool muted) override;
     void setAudioEmulationActive(bool active) override;
+
+    // -- Audio grab (Sound window "GRAB AUDIO" / "SAVE MID") ------------------
+    void setAudioGrabEnabled(bool enabled) override;
+    bool isAudioGrabEnabled() const override { return audioGrabEnabled_; }
+    size_t audioGrabEventCount() const override;
+    std::vector<AudioPortEvent> audioGrabEvents() const override;
+    bool audioGrabOverflowed() const override;
 
     // True when the audio device must stay silent: either the user muted the
     // machine or the emulation loop is not producing frames. Diagnostic and
@@ -169,6 +178,16 @@ private:
 
     // AY write tracking (ports 0x14/0x15)
     bool ayDirty_ = false;           // true if AY was written since last snapshot
+
+    // Audio grab buffer (GRAB AUDIO -> SAVE MID). Appended on the emulation
+    // thread inside io.onwrite, read from the GUI thread — mutex-guarded copy
+    // pattern. Event rate while grabbing is tiny (chip-level writes only), so
+    // contention is negligible. Enabling the grab clears the buffer.
+    std::atomic<bool> audioGrabEnabled_{false};
+    mutable std::mutex audioGrabMutex_;
+    std::vector<AudioPortEvent> audioGrabEvents_;
+    bool audioGrabTruncated_ = false;   // cap hit, events were dropped
+    static constexpr size_t kAudioGrabCap = 200000;  // >> minutes of music
 
     // Standard Vector noise tracking — PIA1 Port C bit 0 (tape-out beeper).
     // Counted in the io.onwrite hook (emulation thread) as actual PC0 state

@@ -166,6 +166,14 @@ public:
     SoundSnapshot soundSnapshot() const override;
     void setMuted(bool muted) override;
 
+    // -- IDebugBackend: audio grab (GRAB AUDIO / SAVE MID) -------------------
+
+    void setAudioGrabEnabled(bool enabled) override;
+    bool isAudioGrabEnabled() const override;
+    size_t audioGrabEventCount() const override;
+    std::vector<AudioPortEvent> audioGrabEvents() const override;
+    bool audioGrabOverflowed() const override;
+
     // -- IDebugBackend: activity --------------------------------------------
 
     ActivitySnapshot activitySnapshot() const override;

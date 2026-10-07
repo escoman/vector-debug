@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include "idebug_backend.h"
+#include "rom_file_dialog.h"
 
 // ---------------------------------------------------------------------------
 // Sound Window
@@ -64,6 +66,12 @@ private:
     bool visible_ = true;
     bool muted_ = false;
     bool visualize_ = false;  // off by default: no level tracking
+
+    // Audio grab -> MIDI export ("GRAB AUDIO" / "SAVE MID"). The grab buffer
+    // lives in the backend (DebugAdapter::io.onwrite); this window only
+    // toggles it and turns the captured events into a .mid file.
+    RomFileDialog midSaveDialog_;
+    std::string grabStatus_;   // one-line result/status under the controls
 
     // Sound log ring buffer
     // Channel order: Std Noise, i8253 1-3, AY Noise, AY A, AY B, AY C

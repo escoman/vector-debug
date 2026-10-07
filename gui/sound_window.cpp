@@ -1,5 +1,7 @@
 #include "sound_window.h"
 
+#include "audio_midi.h"
+
 // Dear ImGui
 #include "imgui.h"
 #include "imgui_internal.h"  // for ImDrawList access
@@ -8,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <fstream>
 
 // ---------------------------------------------------------------------------
 // Channel metadata — UI order is fixed (see sound_window.h):
@@ -260,6 +263,31 @@ static void sectionHeader(const char *title)
 }
 
 // ---------------------------------------------------------------------------
+// SAVE MID: turn the grabbed VI53 port writes into a Standard MIDI File.
+// Parsing/writing lives in src/audio_midi.cpp (pure, unit-tested); here we
+// only fetch the buffer and land the bytes.
+// ---------------------------------------------------------------------------
+
+static void saveGrabbedMid(IDebugBackend &backend, std::string &status,
+                           const std::string &path)
+{
+    const auto events = backend.audioGrabEvents();
+    audiomidi::Config cfg;   // defaults = Vector-06C: 1.4976 MHz, 50 fps,
+                             // one VBlank frame = one quarter note
+    const auto segs = audiomidi::vi53Segments(events, cfg);
+    const auto smf  = audiomidi::writeSmf(segs, cfg, "Vector-06C VI53 grab");
+
+    std::ofstream f(path, std::ios::binary);
+    if (f && !smf.empty()) {
+        f.write(reinterpret_cast<const char *>(smf.data()),
+                static_cast<std::streamsize>(smf.size()));
+        status = "Saved " + std::to_string(segs.size()) + " notes";
+    } else {
+        status = "Save failed: " + path;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main render
 // ---------------------------------------------------------------------------
 
@@ -280,6 +308,39 @@ void SoundWindow::render(IDebugBackend &backend)
     }
     ImGui::SameLine();
     ImGui::Checkbox("Visualize", &visualize_);
+
+    // Audio grab -> MIDI export. GRAB AUDIO records VI53 port writes on the
+    // emulation thread; SAVE MID turns the captured buffer into a .mid.
+    ImGui::SameLine();
+    const bool grabbing = backend.isAudioGrabEnabled();
+    if (ImGui::Button(grabbing ? "STOP GRAB" : "GRAB AUDIO")) {
+        backend.setAudioGrabEnabled(!grabbing);
+        grabStatus_ = grabbing ? "" : "Recording...";
+    }
+    if (grabbing) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
+        ImGui::TextUnformatted("REC");
+        ImGui::PopStyleColor();
+    } else if (backend.audioGrabEventCount() > 0) {
+        ImGui::SameLine();
+        if (ImGui::Button("SAVE MID")) {
+            IDebugBackend *be = &backend;   // backend outlives the dialog
+            midSaveDialog_.onFileSelected = [be, this](const std::string &path) {
+                saveGrabbedMid(*be, grabStatus_, path);
+            };
+            midSaveDialog_.showSave("", "Save MIDI File", {".mid"}, "v06c_sound.mid");
+        }
+    }
+
+    // One-line grab status (event count, truncation warning, save result).
+    if (grabbing || backend.audioGrabEventCount() > 0 || !grabStatus_.empty()) {
+        ImGui::TextDisabled("Grab: %zu VI53 events%s  %s",
+                            backend.audioGrabEventCount(),
+                            backend.audioGrabOverflowed() ? " (TRUNCATED)" : "",
+                            grabStatus_.c_str());
+    }
+    midSaveDialog_.render();
 
     ImGui::Separator();
     ImGui::Spacing();

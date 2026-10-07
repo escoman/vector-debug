@@ -106,6 +106,17 @@ public:
     // Called from the emulation thread only.
     virtual void setAudioEmulationActive(bool active) { (void)active; }
 
+    // -- Audio grab (Sound window "GRAB AUDIO" -> "SAVE MID") ----------------
+    // While enabled, the target records raw VI53 port writes (0x08-0x0B)
+    // stamped with the emulator frame counter. Enabling starts a fresh
+    // buffer; the buffer survives disabling so the GUI can export it.
+
+    virtual void setAudioGrabEnabled(bool enabled) { (void)enabled; }
+    virtual bool isAudioGrabEnabled() const { return false; }
+    virtual size_t audioGrabEventCount() const { return 0; }
+    virtual std::vector<AudioPortEvent> audioGrabEvents() const { return {}; }
+    virtual bool audioGrabOverflowed() const { return false; }
+
     // -- Keyboard injection -------------------------------------------------
 
     virtual void pressKey(int scancode) {}

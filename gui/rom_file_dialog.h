@@ -26,6 +26,14 @@ public:
               const std::string &title = "Open ROM File",
               const std::vector<std::string> &extensions = {".rom", ".r0m"});
 
+    // Show the dialog in SAVE mode: the filename field is prefilled with
+    // defaultFileName, an existing file may be overwritten, and selecting
+    // requires a non-empty name. The known extensions still filter the list.
+    void showSave(const std::string &startDir,
+                  const std::string &title,
+                  const std::vector<std::string> &extensions,
+                  const std::string &defaultFileName);
+
     // Render the dialog (call every frame). Returns true if a file was selected.
     // The callback is invoked with the selected file path.
     bool render();
@@ -68,4 +76,5 @@ private:
 
     std::string title_;
     std::vector<std::string> extensions_;
+    bool saveMode_ = false;   // true after showSave(): "Save" button, new files allowed
 };

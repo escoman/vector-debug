@@ -83,6 +83,7 @@ set(DBG_SOURCES
     ${DBG_SRC_DIR}/map_loader.cpp
     ${DBG_SRC_DIR}/map_import.cpp
     ${DBG_SRC_DIR}/sha256.cpp
+    ${DBG_SRC_DIR}/audio_midi.cpp
 )
 
 # RDB Module (Stage 6.11) — ROM Database Controller
@@ -568,6 +569,7 @@ endif()
 add_executable(test_sound_window
     ${DBG_TST_DIR}/test_sound_window.cpp
     ${DBG_GUI_DIR}/sound_window.cpp
+    ${DBG_GUI_DIR}/rom_file_dialog.cpp   # SAVE MID dialog lives in the Sound window
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
@@ -593,6 +595,39 @@ target_link_libraries(test_sound_window
 
 # Binary resources produce absolute symbols — disable PIE
 set_target_properties(test_sound_window PROPERTIES
+    LINK_FLAGS "-no-pie"
+    POSITION_INDEPENDENT_CODE OFF
+)
+
+# ---------------------------------------------------------------------------
+# Audio grab -> MIDI export test (Stage 6.28)
+#
+# Part A: pure audiomidi tests (VI53 byte-stream parser + SMF writer), no
+# board needed. Part B: DebugAdapter grab buffer through io.onwrite with
+# injected port writes. Part C: guarded golden comparison of PUTUP/RISEOUT
+# attract-mode melodies vs score-derived reference .mid files.
+# ---------------------------------------------------------------------------
+
+add_executable(test_audio_midi
+    ${DBG_TST_DIR}/test_audio_midi.cpp
+    ${BINARY_RESOURCES}
+)
+
+target_include_directories(test_audio_midi PRIVATE
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_audio_midi
+    debugger_adapter
+    debugger_core
+    ${SDL2_LIBRARY}
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# Binary resources produce absolute symbols — disable PIE
+set_target_properties(test_audio_midi PROPERTIES
     LINK_FLAGS "-no-pie"
     POSITION_INDEPENDENT_CODE OFF
 )

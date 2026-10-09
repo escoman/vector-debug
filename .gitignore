@@ -1,6 +1,10 @@
 # Build artifacts (repo root is now the former debugger/)
 /build/
 
+# Python integration test bytecode (tests/integration/*.py)
+__pycache__/
+*.pyc
+
 # Release packaging output (built by `make release` / CI, published as GitHub Release assets)
 /release/
 

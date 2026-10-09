@@ -2,45 +2,22 @@
 #include "memory.h"
 
 // ---------------------------------------------------------------------------
-// RAII guard for temporarily disabling and restoring Memory::onread callback
-// ---------------------------------------------------------------------------
-
-namespace {
-    class CallbackGuard {
-    public:
-        explicit CallbackGuard(Memory& memory)
-            : memory_(memory)
-            , saved_callback_(memory.onread)
-        {
-            memory_.onread = nullptr;
-        }
-
-        ~CallbackGuard() {
-            memory_.onread = saved_callback_;
-        }
-
-        // Non-copyable
-        CallbackGuard(const CallbackGuard&) = delete;
-        CallbackGuard& operator=(const CallbackGuard&) = delete;
-
-    private:
-        Memory& memory_;
-        std::function<void(uint32_t, uint32_t, bool, uint8_t)> saved_callback_;
-    };
-}
-
-// ---------------------------------------------------------------------------
 // DebugMemoryAccess implementation
 // ---------------------------------------------------------------------------
 
 uint8_t DebugMemoryAccess::peek(Memory& memory, uint16_t address, bool stackrq)
 {
-    // RAII guard ensures callback is restored even if an exception occurs
-    CallbackGuard guard(memory);
-    
-    // Use the real Memory::read() path which handles:
-    // - bigram_select() for banking
-    // - bootbytes for boot ROM
-    // - tobank() for physical address translation
-    return memory.read(address, stackrq);
+    // Callback-free read (V06C_DEBUGGER). It runs the same address translation
+    // as Memory::read (bigram_select -> bootbytes -> tobank) but never touches
+    // Memory::onread.
+    //
+    // The previous implementation cleared and restored Memory::onread via an
+    // RAII guard on the transport/worker thread while the emulation thread was
+    // inside Memory::read invoking that very std::function. That was a data
+    // race on the std::function object: the check "if (onread)" passed, then
+    // the guard reassigned it, leaving a torn/null invoker to be called
+    // (SIGSEGV) or a partially destroyed functor (bad_function_call ->
+    // std::terminate -> SIGABRT). See
+    // docs/Known_Issue_MCP_Snapshot_onread_Race.md.
+    return memory.peek(address, stackrq);
 }

@@ -4,7 +4,8 @@
 // McpServer — Stage 6.4
 //
 // Thin MCP adapter over AgentApi.
-// Registers 38 debug_* tools and runs stdio transport.
+// Registers all debug_* tools (tools/list is authoritative) and runs the
+// stdio transport.
 //
 // MCP → AgentApi only. Never touches Board, Memory, DebugAdapter directly.
 // ---------------------------------------------------------------------------
@@ -13,6 +14,7 @@
 #include "mcp_tool.h"     // cpp-mcp tool_builder
 #include "agent_api.h"
 
+#include <ctime>
 #include <map>
 #include <memory>
 #include <string>
@@ -24,7 +26,7 @@ public:
     explicit McpServer(AgentApi &api);
     ~McpServer();
 
-    // Register all 38 debug_* tools.
+    // Register all debug_* tools.
     void registerAllTools();
 
     // Run stdio transport (blocks until stdin closes).
@@ -45,6 +47,10 @@ public:
 private:
     AgentApi &api_;
     std::unique_ptr<mcp::server> server_;
+
+    // Process start time, reported by debug_get_server_info so clients can
+    // compare it against the binary's build stamp (stale-process detection).
+    std::time_t bootTime_ = std::time(nullptr);
 
     // Local tool handler map for direct invocation (testing).
     std::map<std::string, mcp::tool_handler> handlers_;
@@ -69,6 +75,7 @@ private:
     void registerRuntimeAnalysisTools();  // Stage 6.20
     void registerBatchAnalysisTools();    // Stage 6.26
     void registerRasterTools();           // Stage 6.27: beam / raster
+    void registerServerTools();           // build provenance / version
 
     // Register a tool with both cpp-mcp server and local handler map.
     void registerTool(const mcp::tool &tool, mcp::tool_handler handler);

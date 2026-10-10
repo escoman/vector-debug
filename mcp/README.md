@@ -40,14 +40,14 @@ Example Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
-## MCP Tools (73 tools)
+## MCP Tools (74 tools)
 
 All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi method.
 
 > The authoritative tool list is what the server returns from `tools/list` — clients must
 > not hardcode the count. Machine-readable capability marker: `v06c.api_version` in the
 > `initialize` result (2 = Stage 6.26 batch analysis tools, 3 = Stage 6.27 raster/beam
-> debugging tools). The grouped tables below were
+> debugging tools, 4 = `debug_get_server_info` build provenance). The grouped tables below were
 > written for Stage 6.4 and do not list every tool added in Stages 6.11–6.25; the
 > Stage 6.26 batch tools and Stage 6.27 raster/beam tools are documented at the end of
 > this section.
@@ -166,6 +166,11 @@ Limits (§16): `MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS=40000`, `MAX_SEARCH_MATCHES=1
 All three are read-only: they never pause, step, reset or re-render the
 emulation. Every value originates in `DebugAdapter` (the only Vector-aware
 layer); the Agent API and MCP add no video timing of their own.
+
+### Server Meta — Build Provenance (1)
+| Tool | Description |
+|---|---|
+| `debug_get_server_info` | Returns the build stamp of the running server process: `name`, `version`, `gitHash`, `gitState` (`clean`/`dirty`), `buildSeq` (increments with every rebuild), `buildTime`, `apiVersion`, `pid`, `startedAt`, `uptimeSec`. Use it to verify which binary a session is actually talking to — a stdio server keeps running the executable it was spawned from even after the on-disk file is rebuilt (stale `(deleted)` inode), so `buildSeq`/`gitHash` mismatching the current build means the server must be restarted before crash reports can be trusted. The same stamp is logged to stderr at startup. |
 
 ## Raster / Racing-the-Beam Debugging
 

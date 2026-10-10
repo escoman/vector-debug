@@ -3,13 +3,14 @@
 //
 // Entry point for v06c-mcp executable.
 // Creates a headless emulator with real DebugAdapter/Board (no SDL video/audio),
-// AgentApi, McpServer, registers all 38 tools, and runs stdio transport.
+// AgentApi, McpServer, registers all debug_* tools, and runs stdio transport.
 //
 // Stage 6.4.1: Replaced NoBoardTarget with real DebugAdapter/Board.
 // HAL functions are provided by debug_adapter.cpp (same as GUI debugger).
 // ---------------------------------------------------------------------------
 
 #include "mcp_adapter.h"
+#include "vdb_version.h"
 #include "agent_api.h"
 #include "backend.h"
 #include "debug_adapter.h"
@@ -71,6 +72,13 @@ int main(int argc, char *argv[])
     mcp.registerAllTools();
 
     // Log to stderr (stdout is used for MCP protocol)
+    // Build provenance first: when a session later reports a crash/hang,
+    // this line pins the exact binary the process was built from — and,
+    // together with debug_get_server_info, catches stale processes that
+    // survived an on-disk rebuild (old inode kept by the running exec).
+    fprintf(stderr, "v06c-mcp: build v%s git=%s (%s) seq=%s time=%s\n",
+            VDB_VERSION, VDB_GIT_HASH, VDB_GIT_DIRTY,
+            VDB_TOSTRING(VDB_BUILD_SEQ), VDB_BUILD_TIME);
     fprintf(stderr, "v06c-mcp: %zu tools registered\n", mcp.registeredToolNames().size());
 
     // Stage 6.15: Start emulation thread.

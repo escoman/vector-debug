@@ -120,12 +120,12 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // ---------------------------------------------------------------------------
 
 void test_all_tools_registered() {
-    TEST_BEGIN("all 73 tools registered");
+    TEST_BEGIN("all 74 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    // Stage 6.26: 70, + Stage 6.27 raster/beam (beam_state, screen_snapshot,
-    // raster_events) = 73
-    CHECK_EQ(static_cast<int>(names.size()), 73, "should have 73 tools");
+    // Stage 6.26: 70, Stage 6.27 raster/beam (beam_state, screen_snapshot,
+    // raster_events) = 73, + debug_get_server_info (build provenance) = 74
+    CHECK_EQ(static_cast<int>(names.size()), 74, "should have 74 tools");
     // tools/list must reflect reality: no duplicates in registration
     std::set<std::string> unique(names.begin(), names.end());
     CHECK_EQ(static_cast<int>(unique.size()), static_cast<int>(names.size()),
@@ -133,7 +133,8 @@ void test_all_tools_registered() {
     // Stage 6.27: the three raster/beam tools must be registered
     for (const char *t : {"debug_get_beam_state",
                           "debug_get_screen_snapshot",
-                          "debug_get_raster_events"}) {
+                          "debug_get_raster_events",
+                          "debug_get_server_info"}) {
         CHECK(unique.count(t) == 1, std::string("registered: ") + t);
     }
     TEST_END();
@@ -1363,6 +1364,23 @@ void test_mcp_get_vram_bytes() {
     TEST_END();
 }
 
+void test_mcp_get_server_info() {
+    TEST_BEGIN("MCP: debug_get_server_info build provenance");
+    Fixture f;
+    auto r = f.mcp.callTool("debug_get_server_info", {});
+    CHECK(!isErrorContent(r), "server info should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["name"].get<std::string>(), "v06c-mcp", "name");
+    CHECK(!data["version"].get<std::string>().empty(), "version non-empty");
+    CHECK(!data["gitHash"].get<std::string>().empty(), "gitHash non-empty");
+    CHECK(data["buildSeq"].get<int>() >= 0, "buildSeq numeric");
+    CHECK(!data["buildTime"].get<std::string>().empty(), "buildTime non-empty");
+    CHECK_EQ(data["apiVersion"].get<int>(), 4, "api_version 4");
+    CHECK(data["pid"].get<int>() > 1, "pid plausible");
+    CHECK(!data["startedAt"].get<std::string>().empty(), "startedAt non-empty");
+    TEST_END();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -1469,6 +1487,9 @@ int main()
     test_mcp_find_bytecode_sequence();
     test_mcp_find_immediate_in_range();
     test_mcp_get_vram_bytes();
+
+    // Build provenance
+    test_mcp_get_server_info();
 
     // JSON serialization
     test_json_cpu_state_format();

@@ -877,9 +877,70 @@ target_link_libraries(test_agent_rdb_save_sync
 
     # v06c-mcp — MCP executable (headless, stdio transport)
     # Stage 6.4.1: Uses real DebugAdapter/Board instead of NoBoardTarget.
+
+    # ---- Build provenance stamp (mcp/vdb_version.h) ------------------------
+    # A build sequence number incremented on every configure, persisted in
+    # the build dir, plus git hash/dirty state and a UTC configure timestamp.
+    # `make` (scripts/make_release.sh) re-configures on every run, so the
+    # sequence grows with each rebuild; debug_get_server_info reports it so
+    # clients can tell a stale running server apart from a fresh binary.
+    set(VDB_SEQ_FILE "${CMAKE_BINARY_DIR}/.build_seq")
+    if(EXISTS ${VDB_SEQ_FILE})
+        file(READ ${VDB_SEQ_FILE} VDB_BUILD_SEQ)
+        string(STRIP "${VDB_BUILD_SEQ}" VDB_BUILD_SEQ)
+    else()
+        set(VDB_BUILD_SEQ 0)
+    endif()
+    math(EXPR VDB_BUILD_SEQ "${VDB_BUILD_SEQ} + 1")
+    file(WRITE ${VDB_SEQ_FILE} "${VDB_BUILD_SEQ}\n")
+
+    find_package(Git QUIET)
+    set(VDB_GIT_HASH "unknown")
+    set(VDB_GIT_DIRTY "unknown")
+    if(Git_FOUND)
+        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE VDB_GIT_HASH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET RESULT_VARIABLE VDB_GIT_RES)
+        if(NOT VDB_GIT_RES EQUAL 0)
+            set(VDB_GIT_HASH "unknown")
+        endif()
+        execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE VDB_GIT_STATUS
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(VDB_GIT_STATUS STREQUAL "")
+            set(VDB_GIT_DIRTY "clean")
+        else()
+            set(VDB_GIT_DIRTY "dirty")
+        endif()
+    endif()
+    string(TIMESTAMP VDB_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
+    message(STATUS "v06c-mcp build stamp: seq=${VDB_BUILD_SEQ} "
+                   "git=${VDB_GIT_HASH} (${VDB_GIT_DIRTY}) time=${VDB_BUILD_TIME}")
+
     add_executable(v06c-mcp
         ${MCP_DIR}/mcp_main.cpp
         ${BINARY_RESOURCES}
+    )
+
+    # Stamp the MCP TU pair: mcp_main.cpp (executable banner) and
+    # mcp_adapter.cpp (debugger_mcp lib — the debug_get_server_info handler).
+    # Other consumers of debugger_mcp (unit tests, GUI) tolerate both stamped
+    # and default values from vdb_version.h.
+    target_compile_definitions(v06c-mcp PRIVATE
+        VDB_GIT_HASH="${VDB_GIT_HASH}"
+        VDB_GIT_DIRTY="${VDB_GIT_DIRTY}"
+        VDB_BUILD_TIME="${VDB_BUILD_TIME}"
+        VDB_BUILD_SEQ=${VDB_BUILD_SEQ}
+    )
+    target_compile_definitions(debugger_mcp PRIVATE
+        VDB_GIT_HASH="${VDB_GIT_HASH}"
+        VDB_GIT_DIRTY="${VDB_GIT_DIRTY}"
+        VDB_BUILD_TIME="${VDB_BUILD_TIME}"
+        VDB_BUILD_SEQ=${VDB_BUILD_SEQ}
     )
 
     target_include_directories(v06c-mcp PRIVATE

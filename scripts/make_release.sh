@@ -17,3 +17,10 @@ cd "$BUILD_DIR"
 cmake -DENABLE_AI_AGENT=ON ..
 make clean
 make v06c-debugger v06c-mcp -j"$(nproc)"
+
+# Report the provenance baked into the freshly built binary (same stamp
+# debug_get_server_info returns). Ask the binary itself via its startup
+# banner (empty stdin -> immediate exit) so the line reflects what was
+# really compiled, not cache variables:
+#   v06c-mcp: build v0.6.4 git=<hash> (<clean|dirty>) seq=<N> time=<UTC>
+printf 'Current version: ' | "$BUILD_DIR/v06c-mcp" 2>&1 >/dev/null | head -1 || true

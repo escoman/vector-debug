@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // mcp_adapter.cpp — Stage 6.4
 //
-// McpServer implementation: registers 38 debug_* tools as thin wrappers
+// McpServer implementation: registers all debug_* tools (tools/list is
+// authoritative) as thin wrappers
 // over AgentApi methods. Each handler: parse params → call AgentApi →
 // serialize result to MCP content.
 //
@@ -10,10 +11,13 @@
 
 #include "mcp_adapter.h"
 #include "mcp_json.h"
+#include "vdb_version.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <ctime>
 #include <sstream>
+#include <unistd.h>   // getpid()
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -24,18 +28,19 @@ McpServer::McpServer(AgentApi &api)
 {
     mcp::server::configuration conf;
     conf.name = "v06c-mcp";
-    conf.version = "0.6.4";
+    conf.version = VDB_VERSION;
     server_ = std::make_unique<mcp::server>(conf);
-    server_->set_server_info("v06c-mcp", "0.6.4");
+    server_->set_server_info("v06c-mcp", VDB_VERSION);
     // Stage 6.26 §4: capability discovery.  tools/list always reflects the
     // actually registered tools (server_->get_tools()); the machine-readable
     // v06c.api_version lets clients detect batch-analysis capability without
     // guessing from the binary version.  Bump api_version when new tools or
     // result fields are added: 2 = Stage 6.26 batch analysis tools,
-    // 3 = Stage 6.27 raster/beam debugging tools.
+    // 3 = Stage 6.27 raster/beam debugging tools,
+    // 4 = debug_get_server_info build-provenance tool.
     server_->set_capabilities({
         {"tools", {{"listChanged", false}}},
-        {"v06c",  {{"api_version", 3}}}
+        {"v06c",  {{"api_version", 4}}}
     });
 }
 
@@ -97,6 +102,7 @@ void McpServer::registerAllTools() {
     registerRuntimeAnalysisTools();  // Stage 6.20
     registerBatchAnalysisTools();    // Stage 6.26
     registerRasterTools();           // Stage 6.27: beam / raster
+    registerServerTools();           // build provenance / version
 }
 
 void McpServer::runStdio() {
@@ -2129,6 +2135,48 @@ void McpServer::registerRasterTools() {
             return textContent({
                 {"count",  static_cast<int>(events.size())},
                 {"events", events}
+            });
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server tools (1) — build provenance
+//
+// debug_get_server_info answers "which binary is this session actually
+// talking to?": an IDE stdio session keeps running the process it spawned,
+// even after the on-disk executable has been rebuilt (the old inode stays
+// alive as "(deleted)"). Comparing buildSeq/gitHash against the current
+// build/ directory exposes that stale-server state in one call.
+// ---------------------------------------------------------------------------
+
+void McpServer::registerServerTools() {
+    // debug_get_server_info
+    {
+        auto tool = mcp::tool_builder("debug_get_server_info")
+            .with_description("Return MCP server build provenance (version, git hash, build sequence, start time, pid) to verify which binary the session is talking to.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            // ISO-8601 UTC formatter for the time_t stamps.
+            auto isoUtc = [](std::time_t t) -> std::string {
+                char buf[32];
+                std::tm tm{};
+                gmtime_r(&t, &tm);
+                std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
+                return buf;
+            };
+            std::time_t now = std::time(nullptr);
+            return textContent({
+                {"name",       "v06c-mcp"},
+                {"version",    VDB_VERSION},
+                {"gitHash",    VDB_GIT_HASH},
+                {"gitState",   VDB_GIT_DIRTY},
+                {"buildSeq",   VDB_BUILD_SEQ},
+                {"buildTime",  VDB_BUILD_TIME},
+                {"apiVersion", 4},
+                {"pid",        static_cast<int>(::getpid())},
+                {"startedAt",  isoUtc(bootTime_)},
+                {"uptimeSec",  static_cast<int>(now - bootTime_)}
             });
         });
     }

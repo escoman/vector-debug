@@ -113,13 +113,13 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         {12.0f,2, 1, 1, SC_PERIOD,      ".",  ">",      KC_ALPHA},
 
         // Row 3: СС Q ^ S M I T X B Ю , ВК
-        //   RU: СС Й ^ С М И Т Ь Б Ю < ВК
+        //   RU: СС Я Ч С М И Т Ь Б Ю < ВК
         //   СС/ВК are 1.5u wide (matching the JS layout), the rest offset +0.5.
         //   'Ю/@' is its own Vector key (matrix row4 bit0 = SC_AT); the top-row
         //   '-/=' lives on row0 (SC_EQUALS) — genuinely separate keys, as in JS.
         {0.0f, 3, 1.5f, 1, SC_LSHIFT,    "", "\xd0\xa1\xd0\xa1", KC_GREEN},  // СС (olive)
-        {1.5f, 3, 1, 1, SC_Q,           "Q",  "\xd0\xb9", KC_ALPHA},  // й
-        {2.5f, 3, 1, 1, SC_GRAVE,       "^",  "^",      KC_ALPHA},
+        {1.5f, 3, 1, 1, SC_Q,           "Q",  "\xd1\x8f", KC_ALPHA},  // я
+        {2.5f, 3, 1, 1, SC_GRAVE,       "^",  "\xd1\x87", KC_ALPHA},  // ч
         {3.5f, 3, 1, 1, SC_S,           "S",  "\xd1\x81", KC_ALPHA},  // с
         {4.5f, 3, 1, 1, SC_M,           "M",  "\xd0\xbc", KC_ALPHA},  // м
         {5.5f, 3, 1, 1, SC_I,           "I",  "\xd0\xb8", KC_ALPHA},  // и

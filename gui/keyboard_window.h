@@ -44,10 +44,10 @@ public:
 
 private:
     enum KeyColor {
-        KC_ALPHA,    // beige — letter/number keys
-        KC_BROWN,    // dark brown — УС, Ж, Э, ВК, СС, АР2
-        KC_GREEN,    // olive — УС, ЗБ, ПС, space, tab
-        KC_FN,       // golden — F1-F5, РУС, ТАБ
+        KC_ALPHA,    // beige — letter/number keys (incl. Э)
+        KC_BROWN,    // dark brown — system keys: ВВОД, БЛК, СБР
+        KC_GREEN,    // olive — СС, УС, ВК, РУС, ТАБ, ПС, ЗБ, space
+        KC_FN,       // golden — F1-F5, АР2
     };
 
     struct KeyDef {

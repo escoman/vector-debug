@@ -50,6 +50,11 @@ enum {
     // together with ВВОД/СБР and has no keyboard-matrix line of its own. The
     // virtual key only latches host-side, so it never reaches the emulator.
     SC_BLK    = -100,
+    // 'Ю/@' is a real Vector key (matrix row4 bit0) that no PC key produces
+    // directly. The virtual keycap sends this synthetic scancode; keyboard.h
+    // maps it to the 0x401 cell. (Physical host keys never emit a negative
+    // scancode, so this cannot collide with a real press.)
+    SC_AT     = -101,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,7 +78,7 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         {8.0f, 0, 1, 1, SC_8,           "*",  "8",  KC_ALPHA},
         {9.0f, 0, 1, 1, SC_9,           "(",  "9",  KC_ALPHA},
         {10.0f,0, 1, 1, SC_0,           ")",  "0",  KC_ALPHA},
-        {11.0f,0, 1, 1, SC_EQUALS,      "_",  "-",  KC_ALPHA},
+        {11.0f,0, 1, 1, SC_EQUALS,      "=",  "-",  KC_ALPHA},  // '-' / '=' (top row)
         {12.0f,0, 1, 1, SC_SLASH,       "?",  "/",  KC_ALPHA},
 
         // Row 1 (indented 0.5u): J C U K E N G [ ] Z H '
@@ -104,31 +109,34 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         {8.0f, 2, 1, 1, SC_L,           "L",  "\xd0\xbb", KC_ALPHA},  // л
         {9.0f, 2, 1, 1, SC_D,           "D",  "\xd0\xb4", KC_ALPHA},  // д
         {10.0f,2, 1, 1, SC_V,           "V",  "\xd0\xb6", KC_ALPHA},  // ж
-        {11.0f,2, 1, 1, SC_BACKSLASH,   "\\", "\xd1\x8d", KC_BROWN},  // э
+        {11.0f,2, 1, 1, SC_BACKSLASH,   "\\", "\xd1\x8d", KC_ALPHA},  // э (beige, like JS)
         {12.0f,2, 1, 1, SC_PERIOD,      ".",  ">",      KC_ALPHA},
 
-        // Row 3: SS Q ^ S M I T X B - , VK
-        //   RU: СС Й ^ С М И Т Ь Б - , ВК
-        {0.0f, 3, 1, 1, SC_LSHIFT,      "", "\xd0\xa1\xd0\xa1", KC_BROWN},  // СС
-        {1.0f, 3, 1, 1, SC_Q,           "Q",  "\xd0\xb9", KC_ALPHA},  // й
-        {2.0f, 3, 1, 1, SC_GRAVE,       "^",  "^",      KC_ALPHA},
-        {3.0f, 3, 1, 1, SC_S,           "S",  "\xd1\x81", KC_ALPHA},  // с
-        {4.0f, 3, 1, 1, SC_M,           "M",  "\xd0\xbc", KC_ALPHA},  // м
-        {5.0f, 3, 1, 1, SC_I,           "I",  "\xd0\xb8", KC_ALPHA},  // и
-        {6.0f, 3, 1, 1, SC_T,           "T",  "\xd1\x82", KC_ALPHA},  // т
-        {7.0f, 3, 1, 1, SC_X,           "X",  "\xd1\x8c", KC_ALPHA},  // ь
-        {8.0f, 3, 1, 1, SC_B,           "B",  "\xd0\xb1", KC_ALPHA},  // б
-        {9.0f, 3, 1, 1, SC_MINUS,       "-",  "@",      KC_ALPHA},
-        {10.0f,3, 1, 1, SC_COMMA,       ",",  "<",      KC_ALPHA},
-        {11.0f,3, 1, 1, SC_RETURN,      "", "\xd0\x92\xd0\x9a", KC_GREEN},  // ВК
+        // Row 3: СС Q ^ S M I T X B Ю , ВК
+        //   RU: СС Й ^ С М И Т Ь Б Ю < ВК
+        //   СС/ВК are 1.5u wide (matching the JS layout), the rest offset +0.5.
+        //   'Ю/@' is its own Vector key (matrix row4 bit0 = SC_AT); the top-row
+        //   '-/=' lives on row0 (SC_EQUALS) — genuinely separate keys, as in JS.
+        {0.0f, 3, 1.5f, 1, SC_LSHIFT,    "", "\xd0\xa1\xd0\xa1", KC_GREEN},  // СС (olive)
+        {1.5f, 3, 1, 1, SC_Q,           "Q",  "\xd0\xb9", KC_ALPHA},  // й
+        {2.5f, 3, 1, 1, SC_GRAVE,       "^",  "^",      KC_ALPHA},
+        {3.5f, 3, 1, 1, SC_S,           "S",  "\xd1\x81", KC_ALPHA},  // с
+        {4.5f, 3, 1, 1, SC_M,           "M",  "\xd0\xbc", KC_ALPHA},  // м
+        {5.5f, 3, 1, 1, SC_I,           "I",  "\xd0\xb8", KC_ALPHA},  // и
+        {6.5f, 3, 1, 1, SC_T,           "T",  "\xd1\x82", KC_ALPHA},  // т
+        {7.5f, 3, 1, 1, SC_X,           "X",  "\xd1\x8c", KC_ALPHA},  // ь
+        {8.5f, 3, 1, 1, SC_B,           "B",  "\xd0\xb1", KC_ALPHA},  // б
+        {9.5f, 3, 1, 1, SC_AT,          "@",  "\xd0\xae", KC_ALPHA},  // Ю / @
+        {10.5f,3, 1, 1, SC_COMMA,       ",",  "<",      KC_ALPHA},
+        {11.5f,3, 1.5f, 1, SC_RETURN,   "", "\xd0\x92\xd0\x9a", KC_GREEN},  // ВК
 
         // Row 4: RUS TAB PS ZB
         //   RU: РУС ТАБ ПС ЗБ
-        {0.0f, 4, 1.5f, 1, SC_F6,       "RUS","\xd0\xa0\xd0\xa3\xd0\xa1",KC_FN},  // РУС
-        {1.5f, 4, 1.5f, 1, SC_TAB,      "","\xd0\xa2\xd0\x90\xd0\x91",KC_FN},  // ТАБ
-        {3.0f, 4, 5.0f, 1, SC_SPACE,    "",   nullptr, KC_GREEN},
-        {8.0f, 4, 1.5f, 1, SC_LALT,     "", "\xd0\x9f\xd0\xa1", KC_GREEN},  // ПС
-        {9.5f, 4, 1.5f, 1, SC_BACKSPACE,"", "\xd0\x97\xd0\x91", KC_ALPHA},  // ЗБ
+        {0.0f, 4, 1.5f, 1, SC_F6,       "RUS","\xd0\xa0\xd0\xa3\xd0\xa1",KC_GREEN},  // РУС
+        {1.5f, 4, 1.5f, 1, SC_TAB,      "","\xd0\xa2\xd0\x90\xd0\x91",KC_GREEN},  // ТАБ
+        {3.0f, 4, 7.0f, 1, SC_SPACE,    "",   nullptr, KC_GREEN},
+        {10.0f,4, 1.5f, 1, SC_LALT,     "", "\xd0\x9f\xd0\xa1", KC_GREEN},  // ПС
+        {11.5f,4, 1.5f, 1, SC_BACKSPACE,"", "\xd0\x97\xd0\x91", KC_GREEN},  // ЗБ
 
         // --- Numpad (3 columns, offset 14.5u) ---
         // Single centered label (label_ru = nullptr)
@@ -149,7 +157,7 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         // Row 2: F4 F5 AR2
         {14.5f, 2, 1, 1, SC_F4,        "F4",  nullptr, KC_FN},
         {15.5f, 2, 1, 1, SC_F5,        "F5",  nullptr, KC_FN},
-        {16.5f, 2, 1, 1, SC_ESCAPE,    "\xd0\x90\xd0\xa0\x32", nullptr, KC_BROWN},  // АР2
+        {16.5f, 2, 1, 1, SC_ESCAPE,    "\xd0\x90\xd0\xa0\x32", nullptr, KC_FN},  // АР2 (gold)
 
         // Row 3: ↖ ↑ СТР
         //   ↖ = matrix col 1 bit 0x01 (the "^\" legend is the arrow glyph),
@@ -504,9 +512,9 @@ void KeyboardWindow::render(IDebugBackend &backend)
         float ledY = cursorScreenPos.y + pad + 4.0f * kKeyH + kKeyH * 0.7f;
         float ledR = 4.0f;
         bool ruslatOn = backend.isRuslatMode();
-        ImU32 ledColor = !ruslatOn
-            ? IM_COL32(0xFF, 0x20, 0x20, 255)   // bright red — ON
-            : IM_COL32(0x40, 0x10, 0x10, 255);   // dim — OFF
+        ImU32 ledColor = ruslatOn
+            ? IM_COL32(0xFF, 0x20, 0x20, 255)   // bright red — Russian active
+            : IM_COL32(0x40, 0x10, 0x10, 255);   // dim — Latin
         drawList->AddCircleFilled(ImVec2(ledX, ledY), ledR, ledColor);
     }
 

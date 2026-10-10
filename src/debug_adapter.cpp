@@ -160,7 +160,10 @@ void DebugAdapter::init()
                 Board::ResetMode::BLKVVOD : Board::ResetMode::BLKSBR);
     };
 
-    // Track РУС/LAT LED state — the ROM toggles this via port C bit 3
+    // Track РУС/LAT LED state — the ROM drives it via PIA port C bit 3.
+    // ОРИ/ЭРА convention (IndRus): 00h = не горит (Latin), 08h = горит (Russian),
+    // so rus == true ⟺ bit 3 set ⟺ Russian alphabet is active. Reset default is
+    // Latin (ruslatState_ = false → LED off).
     io.onruslat = [this](bool rus) {
         ruslatState_ = rus;
     };

@@ -347,7 +347,11 @@ void McpServer::registerCpuTools() {
                 throw mcp::mcp_exception(mcp::error_code::invalid_params, "value out of range 0..65535");
             }
             auto r = api_.setRegister(name, static_cast<uint16_t>(val));
-            if (!r.success) return errorContent("set_register_failed", r.error_message);
+            // Explicit precondition error ("not_paused") rather than the
+            // generic "set_register_failed"; see debug_write_memory.
+            if (!r.success) return errorContent(
+                r.error_code == ErrorCode::NotPaused ? "not_paused" : "set_register_failed",
+                r.error_message);
             return textContent(mcp_json::successVoidResult());
         });
     }
@@ -409,7 +413,13 @@ void McpServer::registerMemoryTools() {
                 data.push_back(static_cast<uint8_t>(byte));
             }
             auto r = api_.writeMemory(addr, data);
-            if (!r.success) return errorContent("write_memory_failed", r.error_message);
+            // Surface the real precondition as "not_paused" instead of the
+            // generic "write_memory_failed" (the old label made a running-CPU
+            // rejection look like a data-size limit).  Other failures keep the
+            // tool-specific label.
+            if (!r.success) return errorContent(
+                r.error_code == ErrorCode::NotPaused ? "not_paused" : "write_memory_failed",
+                r.error_message);
             return textContent({
                 {"address", mcp_json::hex16(addr)},
                 {"written", static_cast<int>(data.size())}
@@ -493,7 +503,11 @@ void McpServer::registerIoTools() {
             uint8_t port = getUint8(params, "port");
             uint8_t value = getUint8(params, "value");
             auto r = api_.writeIo(port, value);
-            if (!r.success) return errorContent("write_io_failed", r.error_message);
+            // Explicit precondition error ("not_paused") rather than the
+            // generic "write_io_failed"; see debug_write_memory.
+            if (!r.success) return errorContent(
+                r.error_code == ErrorCode::NotPaused ? "not_paused" : "write_io_failed",
+                r.error_message);
             return textContent({
                 {"port",  mcp_json::hex8(port)},
                 {"value", mcp_json::hex8(value)}

@@ -55,8 +55,29 @@ AgentApiResult<void> AgentApi::pause()
 {
     auto t0 = std::chrono::steady_clock::now();
     backend_.requestPause();
+
+    // requestPause() is only a signal: the Emulation Thread performs the real
+    // Running→Paused transition at the next frame boundary (poll_debugger,
+    // ≤ 20 ms).  A pure-atomic pause that returns immediately lets the CPU
+    // keep advancing between MCP calls, so debug_pause reported success while
+    // the machine was still running (snapshot compare / code injection raced).
+    // Block until the transition is actually observed, bounded to a few frames
+    // so a stale pending Run that clears the pause flag surfaces as a Timeout
+    // instead of a silent false ok.  Only reached on the running path; when
+    // already paused (or on the synchronous test mock) isPaused() is true
+    // immediately and the loop is skipped.
     bool paused = backend_.isPaused();
+    for (int i = 0; i < 250 && !paused; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));  // ≤ ~500 ms
+        paused = backend_.isPaused();
+    }
+
     log_.record("pause", "", paused ? "paused" : "still running", elapsedMs(t0));
+    if (!paused) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::Timeout,
+            "pause did not take effect: emulation is still running");
+    }
     return AgentApiResult<void>::ok();
 }
 
@@ -149,6 +170,22 @@ AgentApiResult<void> AgentApi::writeMemory(uint16_t address, const std::vector<u
             ErrorCode::InvalidRange, "address + size exceeds 64K address space");
     }
 
+    // Writing into a running machine is refused by the Backend ("cannot write
+    // memory while running"), which collapsed to a generic write_memory_failed
+    // and read like a size limit (183 bytes failed, 18 passed — the machine was
+    // simply running).  Report the real precondition up front so the client
+    // knows to pause first (see debug_pause).  Mirrors AgentApi::step()'s
+    // NotPaused guard; the Backend still enforces it, this is defense in depth.
+    if (!backend_.isPaused()) {
+        log_.record("writeMemory",
+                    "addr=" + std::to_string(address) + " size=" + std::to_string(data.size()),
+                    "not paused", elapsedMs(t0), false,
+                    "emulation is running; pause before writing");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotPaused,
+            "Cannot write memory: emulation is running, call debug_pause first");
+    }
+
     bool ok = backend_.writeMemory(address, data.data(), data.size());
 
     std::ostringstream oss;
@@ -182,6 +219,20 @@ AgentApiResult<uint8_t> AgentApi::readIo(uint8_t port)
 AgentApiResult<void> AgentApi::writeIo(uint8_t port, uint8_t value)
 {
     auto t0 = std::chrono::steady_clock::now();
+
+    // I/O pokes share the same Backend precondition as memory/registers: they
+    // are refused while the CPU runs ("cannot write io while running").  Report
+    // NotPaused up front rather than a generic operation_failed.
+    if (!backend_.isPaused()) {
+        log_.record("writeIo",
+                    "port=" + std::to_string(port) + " value=" + std::to_string(value),
+                    "not paused", elapsedMs(t0), false,
+                    "emulation is running; pause before writing");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotPaused,
+            "Cannot write I/O port: emulation is running, call debug_pause first");
+    }
+
     auto result = backend_.writeIoPort(port, value);
 
     std::ostringstream oss;
@@ -548,6 +599,17 @@ AgentApiResult<void> AgentApi::setRegister(const std::string &name, uint16_t val
         } else {
             writeValue = (current & 0xFF00) | (value & 0xFF);
         }
+    }
+
+    // Registers, like memory, can only be poked on a frozen CPU; the Backend
+    // refuses while running ("cannot write register while running").  Surface
+    // the real precondition as NotPaused instead of a generic failure.
+    if (!backend_.isPaused()) {
+        log_.record("setRegister", "name=" + name, "not paused", elapsedMs(t0),
+                    false, "emulation is running; pause before writing");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotPaused,
+            "Cannot set register: emulation is running, call debug_pause first");
     }
 
     bool ok = backend_.writeRegister(m.pair, writeValue);

@@ -25,7 +25,7 @@
 
 // Semantic version of the debugger/MCP build.
 #ifndef VDB_VERSION
-#define VDB_VERSION "0.6.4"
+#define VDB_VERSION "0.6.5"
 #endif
 
 // Short git hash the binary was configured from.

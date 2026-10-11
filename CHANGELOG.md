@@ -10,6 +10,23 @@ The top-most `## [X.Y.Z]` section is used as the GitHub Release notes body
 Prepend new versions at the top; keep this first HTML comment free of `## [` lines.
 -->
 
+## [0.6.5] - 2026-10-12
+
+Reliable state control for AI-agent sessions: `debug_pause` now freezes, and
+memory/register/I/O writes on a running machine report why they were refused.
+
+### Fixed
+- `debug_pause` blocked until the emulation thread actually reached the Paused
+  state instead of returning success the instant the pause was requested. The
+  previous fire-and-forget signal let the CPU keep advancing between MCP calls,
+  so a "paused" machine was not deterministic and VRAM/snapshot comparison and
+  code injection raced. A pause that fails to take effect now surfaces a clear
+  `timeout` error rather than a false success.
+- `debug_write_memory`, `debug_set_register` and `debug_write_io` on a running
+  machine now return the explicit `not_paused` error code with an actionable
+  message ("call debug_pause first") instead of the generic `*_failed`. A
+  rejected write no longer looks like a data-size limit.
+
 ## [1.0.0] - 2026-10-02
 
 First public release of the Vector-06C debugger and its MCP server.

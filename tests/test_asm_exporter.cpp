@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,33 @@ static std::string writeTempFile(const std::string &name,
 static void cleanupTempFiles()
 {
     system("rm -rf /tmp/test_asm_export_*");
+}
+
+static std::string readWholeFile(const std::string &path)
+{
+    std::ifstream f(path);
+    return std::string((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+}
+
+// All lines of `text` that contain `needle`.
+static std::vector<std::string> linesContaining(const std::string &text,
+                                                 const std::string &needle)
+{
+    std::vector<std::string> lines;
+    std::string line;
+    std::istringstream in(text);
+    while (std::getline(in, line)) {
+        if (line.find(needle) != std::string::npos) lines.push_back(line);
+    }
+    return lines;
+}
+
+static size_t countLines(const std::string &text)
+{
+    size_t n = 0;
+    for (char c : text) if (c == '\n') ++n;
+    return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -887,6 +915,255 @@ TEST_END()
 }
 
 // ---------------------------------------------------------------------------
+// Test: String-typed RDB properties are printed above the label
+//
+// The RDB is the source of truth for annotations the analysis pipeline writes
+// (params / returns / ...); the listing used to show only name + comment, so
+// they were invisible in the asm.  Non-String values stay hidden (noise).
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(rdb_properties_in_listing)
+{
+    std::vector<uint8_t> rom(256, 0x00);
+    rom[0x10] = 0xCD; rom[0x11] = 0x30; rom[0x12] = 0x00;   // CALL 0030
+    rom[0x13] = 0xC9;                                        // RET
+    rom[0x31] = 0xC9;                                        // RET
+
+    std::string romPath = writeTempFile("props.rom", rom.data(), rom.size());
+
+    RdbController rdb;
+    rdb.initialize("vector06c", {});
+    RdbObject func;
+    func.address = 0x0030;
+    func.type = RdbObjectType::Function;
+    func.name = "my_func";
+    func.comment = "Test function";
+    func.properties["returns"] =
+        RdbPropertyValue::fromString("F (count)");
+    func.properties["params"] =
+        RdbPropertyValue::fromString("p0{carrier=pair:DE;size=16} | p1{carrier=A;size=8}");
+    func.properties["frame_size"] = RdbPropertyValue::fromInt(6);
+    func.properties["pure"] = RdbPropertyValue::fromBool(true);
+    func.properties["empty_note"] = RdbPropertyValue::fromString("");
+    // Provenance bookkeeping the analysis pipeline stores per seed.
+    func.properties["seed_evidence"] = RdbPropertyValue::fromString("call");
+    func.properties["seed_from"] = RdbPropertyValue::fromString("0x0546");
+    func.properties["seed_source"] = RdbPropertyValue::fromString("debug_analyze_code");
+    // Only the "seed_" prefix is filtered, not a key that merely starts the same.
+    func.properties["seed"] = RdbPropertyValue::fromString("0x0030");
+    rdb.addObject(func);
+
+    std::string rdbPath = "/tmp/test_asm_export_props.rdb";
+    rdb.saveAs(rdbPath);
+
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.rdbPath = rdbPath;
+    config.outputDir = "/tmp/test_asm_export_props";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "property export succeeds");
+
+    std::string code = readWholeFile("/tmp/test_asm_export_props/code/code.asm");
+
+    // The value is emitted verbatim (no HTML-entity escaping, no reformatting).
+    CHECK(code.find("; params: p0{carrier=pair:DE;size=16} | p1{carrier=A;size=8}")
+              != std::string::npos,
+          "code.asm has the params line");
+    CHECK(code.find("; returns: F (count)") != std::string::npos,
+          "code.asm has the returns line");
+
+    // Non-String and empty values are skipped.
+    CHECK(code.find("frame_size") == std::string::npos, "Integer property not printed");
+    CHECK(code.find("; pure") == std::string::npos, "Boolean property not printed");
+    CHECK(code.find("empty_note") == std::string::npos, "empty String not printed");
+
+    // seed_* provenance stays out of the listing (it would be 3 lines per
+    // seeded object — on exolon 1218 noise lines against 32 params lines).
+    CHECK(code.find("seed_evidence") == std::string::npos &&
+          code.find("seed_from") == std::string::npos &&
+          code.find("seed_source") == std::string::npos,
+          "seed_* properties are not printed");
+    CHECK(code.find("; seed: 0x0030") != std::string::npos,
+          "plain 'seed' key still prints — only the seed_ prefix is filtered");
+
+    // Order: RDB comment, then properties (alphabetical by key), then the label.
+    size_t pComment = code.find("; Test function");
+    size_t pParams  = code.find("; params:");
+    size_t pReturns = code.find("; returns:");
+    size_t pLabel   = code.find("my_func:");
+    CHECK(pComment != std::string::npos && pParams != std::string::npos &&
+          pReturns != std::string::npos && pLabel != std::string::npos,
+          "comment, params, returns and label all present");
+    CHECK(pComment < pParams && pParams < pReturns && pReturns < pLabel,
+          "comment before params before returns before label");
+
+    // The same lines belong in layout.asm too (it is the streamed build file,
+    // comments there are harmless); the label must stay on its instruction.
+    std::string layout = readWholeFile("/tmp/test_asm_export_props/layout.asm");
+    CHECK(layout.find("; params: p0{") != std::string::npos,
+          "layout.asm carries the params line");
+    CHECK(layout.find("my_func:\n\tnop") != std::string::npos,
+          "layout: label still directly above its instruction");
+    // Full block: comment, then properties alphabetically (params, returns,
+    // seed — the seed_* keys are filtered out), then the label and instruction.
+    CHECK(layout.find("; Test function\n"
+                       "; params: p0{carrier=pair:DE;size=16} | p1{carrier=A;size=8}\n"
+                       "; returns: F (count)\n"
+                       "; seed: 0x0030\n"
+                       "my_func:\n\tnop\n") != std::string::npos,
+          "layout: the whole annotation block is in the expected order");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: a multi-line property value cannot leak code into the listing
+//
+// The RDB normalizes on write and on load; the exporter re-normalizes as a
+// safety net.  Either way every line carrying property text must be a comment.
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(rdb_property_value_stays_on_one_line)
+{
+    std::vector<uint8_t> rom(256, 0x00);
+    rom[0x10] = 0xCD; rom[0x11] = 0x30; rom[0x12] = 0x00;   // CALL 0030
+    rom[0x13] = 0xC9;                                        // RET
+    rom[0x31] = 0xC9;                                        // RET
+
+    std::string romPath = writeTempFile("propml.rom", rom.data(), rom.size());
+
+    RdbController rdb;
+    rdb.initialize("vector06c", {});
+    RdbObject func;
+    func.address = 0x0030;
+    func.type = RdbObjectType::Function;
+    func.name = "my_func";
+    // A break plus a line that would be valid code if it ever reached column 0.
+    func.properties["params"] =
+        RdbPropertyValue::fromString("p0{x=1}\nINJECTED\tmvi\ta,0FFh");
+    rdb.addObject(func);
+
+    std::string rdbPath = "/tmp/test_asm_export_propml.rdb";
+    rdb.saveAs(rdbPath);
+
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.rdbPath = rdbPath;
+    config.outputDir = "/tmp/test_asm_export_propml";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "multi-line property export succeeds");
+
+    // Same ROM and same object, only the property removed: the listing may
+    // gain exactly one line, and that line must be a comment.
+    {
+        RdbController bareRdb;
+        bareRdb.initialize("vector06c", {});
+        RdbObject plain = func;
+        plain.properties.clear();
+        bareRdb.addObject(plain);
+        std::string bareRdbPath = "/tmp/test_asm_export_propml_bare.rdb";
+        bareRdb.saveAs(bareRdbPath);
+
+        AsmExportConfig bareConfig;
+        bareConfig.romPath = romPath;
+        bareConfig.rdbPath = bareRdbPath;
+        bareConfig.outputDir = "/tmp/test_asm_export_propml_bare";
+        bareConfig.origin = 0x0000;
+        AsmExporter(bareConfig).run();
+    }
+
+    const char *rel[] = {"/code/code.asm", "/layout.asm"};
+    for (const char *r : rel) {
+        std::string content = readWholeFile(std::string("/tmp/test_asm_export_propml") + r);
+        std::string bare = readWholeFile(std::string("/tmp/test_asm_export_propml_bare") + r);
+        std::string msg =
+            std::string(r) + ": the value costs exactly one extra line";
+        CHECK(countLines(content) == countLines(bare) + 1, msg.c_str());
+        std::vector<std::string> hits = linesContaining(content, "INJECTED");
+        CHECK(hits.size() == 1, "injected text lands on exactly one line");
+        for (const auto &line : hits) {
+            CHECK(line.size() >= 2 && line[0] == ';' && line[1] == ' ',
+                  "line carrying property text is a comment");
+            CHECK(line.find("; params: p0{x=1} INJECTED") != std::string::npos,
+                  "the whole value stays on the params comment line");
+        }
+    }
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: no printable properties -> byte-identical output (backward compat)
+//
+// putup/testay RDBs carry no properties, so their listings must not change at
+// all — not even a blank line or an empty comment.
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(rdb_without_properties_output_unchanged)
+{
+    std::vector<uint8_t> rom(256, 0x00);
+    rom[0x10] = 0xCD; rom[0x11] = 0x30; rom[0x12] = 0x00;   // CALL 0030
+    rom[0x13] = 0xC9;                                        // RET
+    rom[0x31] = 0xC9;                                        // RET
+
+    std::string romPath = writeTempFile("propnone.rom", rom.data(), rom.size());
+
+    auto exportWithProps = [&](bool withProps, const std::string &dir) {
+        RdbController rdb;
+        rdb.initialize("vector06c", {});
+        RdbObject func;
+        func.address = 0x0030;
+        func.type = RdbObjectType::Function;
+        func.name = "my_func";
+        func.comment = "Test function";
+        if (withProps) {
+            func.properties["frame_size"] = RdbPropertyValue::fromInt(6);
+            func.properties["pure"] = RdbPropertyValue::fromBool(false);
+            func.properties["cost"] = RdbPropertyValue::fromDouble(1.5);
+        }
+        rdb.addObject(func);
+        std::string rdbPath = dir + ".rdb";
+        rdb.saveAs(rdbPath);
+
+        AsmExportConfig config;
+        config.romPath = romPath;
+        config.rdbPath = rdbPath;
+        config.outputDir = dir;
+        config.origin = 0x0000;
+        AsmExporter(config).run();
+    };
+
+    exportWithProps(false, "/tmp/test_asm_export_prop_none");
+    exportWithProps(true,  "/tmp/test_asm_export_prop_nonstring");
+
+    for (const std::string rel : {"/code/code.asm", "/layout.asm", "/main.asm"}) {
+        std::string a = readWholeFile("/tmp/test_asm_export_prop_none" + rel);
+        std::string b = readWholeFile("/tmp/test_asm_export_prop_nonstring" + rel);
+        CHECK(!a.empty(), ("file produced: " + rel).c_str());
+        CHECK(a == b, ("non-String properties leave " + rel + " byte-identical").c_str());
+    }
+
+    // And the property-less listing has no property comments at all.
+    std::string code = readWholeFile("/tmp/test_asm_export_prop_none/code/code.asm");
+    CHECK(linesContaining(code, "; ").size() >= 1, "comment line still present");
+    CHECK(code.find("; frame_size") == std::string::npos &&
+          code.find("; pure") == std::string::npos &&
+          code.find("; cost") == std::string::npos,
+          "no property lines when there is nothing printable");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -912,6 +1189,9 @@ int main()
     RUN_TEST(clipping_outside_window);
     RUN_TEST(variable_attribution_and_operand_name);
     RUN_TEST(overlapping_name_keeps_true_address);
+    RUN_TEST(rdb_properties_in_listing);
+    RUN_TEST(rdb_property_value_stays_on_one_line);
+    RUN_TEST(rdb_without_properties_output_unchanged);
 
     printf("\nResults: %d passed, %d failed\n", testsPassed, testsFailed);
     return testsFailed > 0 ? 1 : 0;

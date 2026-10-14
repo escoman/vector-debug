@@ -189,11 +189,17 @@ private:
     std::string emitDataAsm();
 
     // Emission helpers shared by the layout and by the read-only views
-    // Comment + label for an address, or "" when nothing is worth printing.
+    // Comment, RDB properties and label for an address, or "" when nothing is
+    // worth printing.
     // `defined` collects the labels actually emitted, so that names whose bytes
     // belong to another unit can be released as `equ` instead (Stage 6.23 §2.4).
     std::string emitAddressLabel(uint16_t addr,
                                  std::set<std::string> &defined) const;
+    // String-typed RDB properties of the object at `addr`, one `; key: value`
+    // comment line each, in map (alphabetical) order, skipping the pipeline's
+    // own "seed_*" provenance keys.  Empty when the address carries no object
+    // or no printable property.
+    std::string emitObjectProperties(uint16_t addr) const;
     // defb rows for the absolute inclusive range [start, end]
     std::string emitByteRows(uint32_t start, uint32_t end) const;
     std::string emitExportJson(const AsmExportReport &report);

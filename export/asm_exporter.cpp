@@ -691,7 +691,7 @@ AsmCoverage AsmExporter::computeCoverage() const
 }
 
 // ---------------------------------------------------------------------------
-// emitAddressLabel — comment + label in front of an emitted unit
+// emitAddressLabel — comment, properties and label for an emitted unit
 // ---------------------------------------------------------------------------
 
 std::string AsmExporter::emitAddressLabel(uint16_t addr,
@@ -717,9 +717,47 @@ std::string AsmExporter::emitAddressLabel(uint16_t addr,
     if (hasRdb_) {
         const std::string comment = rdb_.getComment(addr);
         if (!comment.empty()) os << "; " << comment << "\n";
+        os << emitObjectProperties(addr);
     }
     os << name << ":\n";
     defined.insert(name);
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// emitObjectProperties — RDB properties of the object at `addr`, one per line
+//
+// The RDB is the source of truth for structured annotations (params, returns,
+// reads, writes, io, hook_slot) produced by the analysis pipeline, but the
+// listing used to carry only name + comment, so they were invisible in the
+// asm.  Only String-typed values are printed — int/bool/double would add noise
+// without adding context.  Order follows the std::map key order (alphabetical,
+// therefore deterministic across runs).
+//
+// Keys with the "seed_" prefix are skipped: seed_evidence / seed_from /
+// seed_source is the analysis pipeline's own provenance bookkeeping, not an
+// annotation of the routine, and on exolon/riseout it is 1218/1080 lines
+// against 32/77 lines of actual params/returns.  It stays available in
+// export.json and the call graph.
+//
+// Values are re-normalized here as a safety net: the RDB already normalizes on
+// load and on write, and normalizeRdbText is idempotent, but a leaked line
+// break would turn the tail of a value into code and break the build.
+// ---------------------------------------------------------------------------
+
+std::string AsmExporter::emitObjectProperties(uint16_t addr) const
+{
+    const RdbObject *obj = hasRdb_ ? rdb_.getObject(addr) : nullptr;
+    if (!obj) return "";
+
+    std::ostringstream os;
+    for (const auto &kv : obj->properties) {
+        if (kv.second.type != RdbPropertyValue::Type::String) continue;
+        if (kv.first.compare(0, 5, "seed_") == 0) continue;
+        const std::string value = normalizeRdbText(kv.second.stringValue);
+        if (value.empty()) continue;
+        os << "; " << kv.first << ": " << value << "\n";
+    }
     return os.str();
 }
 

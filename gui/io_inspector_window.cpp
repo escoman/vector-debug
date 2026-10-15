@@ -45,6 +45,8 @@ void IoInspectorWindow::render(IDebugBackend &backend)
     if (!pauseCapture_) {
         cachedEntries_     = backend.ioHistorySnapshot();
         cachedInstrEvents_ = backend.instructionHistorySnapshot();
+        cachedIntEntries_  = backend.interruptEventsSnapshot(
+                                static_cast<size_t>(maxEntries_) * 4);
     }
     needsRefresh_ = false;
 
@@ -55,6 +57,11 @@ void IoInspectorWindow::render(IDebugBackend &backend)
 
     // Render I/O table
     renderIoTable(backend);
+
+    ImGui::Separator();
+
+    // Render interrupt (RST 7 / INT) log
+    renderInterruptLog(backend);
 
     ImGui::Separator();
 
@@ -81,10 +88,12 @@ void IoInspectorWindow::renderToolbar(IDebugBackend &backend)
     ImGui::Checkbox("Pause Capture", &pauseCapture_);
 
     ImGui::SameLine();
-    // Clear button — clears I/O history only
+    // Clear button — clears I/O and interrupt history
     if (ImGui::Button("Clear")) {
         backend.clearIoHistory();
+        backend.clearInterruptEvents();
         cachedEntries_.clear();
+        cachedIntEntries_.clear();
         needsRefresh_ = true;
     }
 
@@ -230,6 +239,105 @@ void IoInspectorWindow::renderIoTable(IDebugBackend &backend)
     if (displayedCount == 0) {
         ImGui::TextDisabled("(no matching I/O events)");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Interrupt (RST 7 / INT) log
+// ---------------------------------------------------------------------------
+
+void IoInspectorWindow::renderInterruptLog(IDebugBackend &backend)
+{
+    (void)backend;
+
+    char title[64];
+    snprintf(title, sizeof(title), "Interrupt Log (%zu)###intlog",
+             cachedIntEntries_.size());
+
+    if (!ImGui::CollapsingHeader(title)) {
+        return;
+    }
+
+    if (cachedIntEntries_.empty()) {
+        ImGui::TextDisabled("(no hardware interrupts recorded — INT fires during "
+                            "frame run, not single-step)");
+        lastIntCount_ = -1;
+        return;
+    }
+
+    // Summary line: hardware RST 7 events are always vector 0x0038; show the
+    // wake-vs-active split so a busy-wait vs HLT idling ROM is obvious at a glance.
+    size_t wakes = 0;
+    for (const auto &ev : cachedIntEntries_) {
+        if (ev.wasHalt) wakes++;
+    }
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
+                       "HARDWARE INT via RST 7 -> 0x0038 | total=%zu  wake-from-HLT=%zu  active=%zu",
+                       cachedIntEntries_.size(), wakes,
+                       cachedIntEntries_.size() - wakes);
+
+    // Display the most recent maxEntries_ events.
+    size_t total = cachedIntEntries_.size();
+    size_t startIdx = 0;
+    if (static_cast<int>(total) > maxEntries_) {
+        startIdx = total - static_cast<size_t>(maxEntries_);
+    }
+
+    // Column widths are shared verbatim by the header and every data row, all
+    // left-justified with a fixed 2-space gap, so each value's left edge lands
+    // directly under its label. Addresses are pre-formatted to 4-char hex so
+    // they never lose leading zeros and never overflow their field.
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
+                       "%-7s  %-6s  %-5s  %-6s  %-5s  %-7s  %s",
+                       "#", "Frame", "Line", "RetPC", "SP", "Vector", "Site");
+
+    int displayedCount = 0;
+    for (size_t i = startIdx; i < total; ++i) {
+        const auto &ev = cachedIntEntries_[i];
+
+        // Pre-format the three address columns to fixed 4-char hex strings so
+        // they align under their headers (widths match the header format above).
+        char retpcStr[8], spStr[8], vecStr[8];
+        snprintf(retpcStr, sizeof(retpcStr), "%04X", static_cast<unsigned>(ev.retPc));
+        snprintf(spStr,    sizeof(spStr),    "%04X", static_cast<unsigned>(ev.sp));
+        snprintf(vecStr,   sizeof(vecStr),   "%04X", static_cast<unsigned>(ev.vector));
+
+        char line[160];
+        snprintf(line, sizeof(line),
+                 "%-7llu  %-6llu  %-5u  %-6s  %-5s  %-7s  %s",
+                 static_cast<unsigned long long>(ev.seq),
+                 static_cast<unsigned long long>(ev.frame & 0xFFFF),
+                 ev.rasterLine,
+                 retpcStr, spStr, vecStr,
+                 ev.wasHalt ? "wake-HLT" : "active");
+
+        ImGui::PushID(static_cast<int>(i));
+
+        bool clicked = ImGui::Selectable(line, false,
+                                          ImGuiSelectableFlags_AllowDoubleClick);
+
+        if (ImGui::BeginPopupContextItem("intctx")) {
+            if (ImGui::MenuItem("Go to Disassembly")) {
+                if (onGoToDisassembly) onGoToDisassembly(ev.retPc);
+            }
+            if (ImGui::MenuItem("Go to Memory Inspector")) {
+                if (onGoToMemoryInspector) onGoToMemoryInspector(ev.retPc);
+            }
+            ImGui::EndPopup();
+        }
+
+        if (clicked && ImGui::IsMouseDoubleClicked(0)) {
+            if (onGoToDisassembly) onGoToDisassembly(ev.retPc);
+        }
+
+        ImGui::PopID();
+        displayedCount++;
+    }
+
+    // Auto-scroll to the newest interrupt only when new ones appear.
+    if (followIo_ && displayedCount > 0 && displayedCount != lastIntCount_) {
+        ImGui::SetScrollHereY(1.0f);
+    }
+    lastIntCount_ = displayedCount;
 }
 
 // ---------------------------------------------------------------------------

@@ -37,10 +37,11 @@ McpServer::McpServer(AgentApi &api)
     // guessing from the binary version.  Bump api_version when new tools or
     // result fields are added: 2 = Stage 6.26 batch analysis tools,
     // 3 = Stage 6.27 raster/beam debugging tools,
-    // 4 = debug_get_server_info build-provenance tool.
+    // 4 = debug_get_server_info build-provenance tool,
+    // 5 = debug_get_int_events / debug_clear_int_events (RST 7 / INT log).
     server_->set_capabilities({
         {"tools", {{"listChanged", false}}},
-        {"v06c",  {{"api_version", 4}}}
+        {"v06c",  {{"api_version", 5}}}
     });
 }
 
@@ -102,6 +103,7 @@ void McpServer::registerAllTools() {
     registerRuntimeAnalysisTools();  // Stage 6.20
     registerBatchAnalysisTools();    // Stage 6.26
     registerRasterTools();           // Stage 6.27: beam / raster
+    registerInterruptTools();        // hardware INT / RST 7 log
     registerServerTools();           // build provenance / version
 }
 
@@ -2155,6 +2157,74 @@ void McpServer::registerRasterTools() {
 }
 
 // ---------------------------------------------------------------------------
+// Hardware interrupt tools (2) — RST 7 / INT log
+//
+// debug_get_int_events returns the recent tail of HARDWARE interrupts taken
+// through RST 7 -> 0x0038, each with the interrupted return site (ret_pc),
+// the wake-from-HLT flag, stack pointer and beam position. Because these come
+// from the emulator core's INT path, they are distinguishable from a software
+// `RST 7` executed in the code stream. debug_clear_int_events resets the log.
+// ---------------------------------------------------------------------------
+
+void McpServer::registerInterruptTools() {
+    // debug_get_int_events
+    {
+        auto tool = mcp::tool_builder("debug_get_int_events")
+            .with_description(
+                "Return recorded HARDWARE interrupts (INT line sampled with INTE "
+                "set, vectorized through RST 7 -> 0x0038). Each event carries the "
+                "interrupted return site (ret_pc), the wake-from-HLT flag, the "
+                "stack pointer and the beam position (frame, raster_line, v_cycle) "
+                "at the moment the vector was taken. Lets you see WHERE interrupts "
+                "actually arrive, whether the CPU idled in HLT or was interrupted "
+                "mid-instruction, and how many fire per frame. Read-only; returns "
+                "the most recent tail.")
+            .with_number_param("max_entries", "Max events (default 1000, cap 50000)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            size_t maxResults = getCount(
+                params, "max_entries",
+                static_cast<int>(AgentLimits::INTERRUPT_EVENTS_DEFAULT_LIMIT));
+
+            auto r = api_.getInterruptEvents(maxResults);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            mcp::json events = mcp::json::array();
+            for (const auto &e : r.value) {
+                events.push_back({
+                    {"seq",             e.seq},
+                    {"frame",           e.frame},
+                    {"v_cycle",         e.vCycle},
+                    {"raster_line",     e.rasterLine},
+                    {"v_cycle_in_line", e.vCycleInLine},
+                    {"ret_pc",          mcp_json::hex16(e.retPc)},
+                    {"sp",              mcp_json::hex16(e.sp)},
+                    {"vector",          mcp_json::hex16(e.vector)},
+                    {"was_halt",        e.wasHalt},
+                    {"is_hardware",     e.isHardware}
+                });
+            }
+            return textContent({
+                {"count",  static_cast<int>(events.size())},
+                {"events", events}
+            });
+        });
+    }
+
+    // debug_clear_int_events
+    {
+        auto tool = mcp::tool_builder("debug_clear_int_events")
+            .with_description("Clear the accumulated hardware interrupt (RST 7 / INT) event log.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.clearInterruptEvents();
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+            return requireVoidResult(r);
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Server tools (1) — build provenance
 //
 // debug_get_server_info answers "which binary is this session actually
@@ -2187,7 +2257,7 @@ void McpServer::registerServerTools() {
                 {"gitState",   VDB_GIT_DIRTY},
                 {"buildSeq",   VDB_BUILD_SEQ},
                 {"buildTime",  VDB_BUILD_TIME},
-                {"apiVersion", 4},
+                {"apiVersion", 5},
                 {"pid",        static_cast<int>(::getpid())},
                 {"startedAt",  isoUtc(bootTime_)},
                 {"uptimeSec",  static_cast<int>(now - bootTime_)}

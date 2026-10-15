@@ -40,14 +40,14 @@ Example Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
-## MCP Tools (74 tools)
+## MCP Tools (76 tools)
 
 All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi method.
 
 > The authoritative tool list is what the server returns from `tools/list` — clients must
 > not hardcode the count. Machine-readable capability marker: `v06c.api_version` in the
 > `initialize` result (2 = Stage 6.26 batch analysis tools, 3 = Stage 6.27 raster/beam
-> debugging tools, 4 = `debug_get_server_info` build provenance). The grouped tables below were
+> debugging tools, 4 = `debug_get_server_info` build provenance, 5 = RST 7 / INT log). The grouped tables below were
 > written for Stage 6.4 and do not list every tool added in Stages 6.11–6.25; the
 > Stage 6.26 batch tools and Stage 6.27 raster/beam tools are documented at the end of
 > this section.
@@ -166,6 +166,19 @@ Limits (§16): `MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS=40000`, `MAX_SEARCH_MATCHES=1
 All three are read-only: they never pause, step, reset or re-render the
 emulation. Every value originates in `DebugAdapter` (the only Vector-aware
 layer); the Agent API and MCP add no video timing of their own.
+
+### Interrupts — RST 7 / INT log (2)
+| Tool | Description |
+|---|---|
+| `debug_get_int_events` | Ring of **hardware** interrupts — the INT line sampled with INTE set and vectorized through `RST 7 → 0x0038`. Each event carries `seq`, `frame`, `raster_line`, `v_cycle`/`v_cycle_in_line`, `ret_pc` (the interrupted return site), `sp`, `vector`, `was_halt` (true when the INT woke the CPU out of `HLT`) and `is_hardware` (always true — this is the emulator's INT path, so it is distinguishable from a software `RST 7` in the code). Returns the most recent tail: `max_entries` (default 1000, cap 50000). Read-only; interrupts fire during frame run, not single-step. |
+| `debug_clear_int_events` | Clear the accumulated interrupt event log. |
+
+The interrupt source is captured in the emulator core (`Board::check_interrupt`,
+compiled only under `V06C_DEBUGGER`) and recorded on the emulation thread by
+`DebugAdapter`, decorated with the live beam position — the same path as
+`debug_get_raster_events`. Use it to answer where interrupts actually arrive,
+whether the ROM idles in `HLT` or is interrupted mid-instruction, and how many
+fire per frame (expected cadence: 1 at 50 Hz).
 
 ### Server Meta — Build Provenance (1)
 | Tool | Description |

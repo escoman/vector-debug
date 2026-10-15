@@ -171,6 +171,13 @@ public:
         size_t maxResults = AgentLimits::RASTER_EVENTS_DEFAULT_LIMIT);
     AgentApiResult<void> clearRasterEvents();
 
+    // -- Hardware interrupt events (RST 7 / INT) ----------------------------
+    // Recent tail of hardware interrupts, decorated with beam position.
+    // maxResults caps the returned tail (0 = all, up to MAX_INTERRUPT_EVENTS).
+    AgentApiResult<std::vector<AgentInterruptEvent>> getInterruptEvents(
+        size_t maxResults = AgentLimits::INTERRUPT_EVENTS_DEFAULT_LIMIT);
+    AgentApiResult<void> clearInterruptEvents();
+
     // -- Annotations (Stage 6.3: AgentApiResult<void>) -----------------------
 
     AgentApiResult<void> createFunction(uint16_t address, uint16_t size = 0);

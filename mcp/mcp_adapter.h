@@ -75,6 +75,7 @@ private:
     void registerRuntimeAnalysisTools();  // Stage 6.20
     void registerBatchAnalysisTools();    // Stage 6.26
     void registerRasterTools();           // Stage 6.27: beam / raster
+    void registerInterruptTools();        // hardware INT / RST 7 log
     void registerServerTools();           // build provenance / version
 
     // Register a tool with both cpp-mcp server and local handler map.

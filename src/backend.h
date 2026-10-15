@@ -157,6 +157,9 @@ public:
         int port, uint16_t pc, size_t maxResults) const override;
     void clearRasterEvents() override;
 
+    std::vector<InterruptEvent> interruptEventsSnapshot(size_t maxResults) const override;
+    void clearInterruptEvents() override;
+
     // -- IDebugBackend: palette ---------------------------------------------
 
     PaletteSnapshot paletteSnapshot() const override;

@@ -120,12 +120,13 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // ---------------------------------------------------------------------------
 
 void test_all_tools_registered() {
-    TEST_BEGIN("all 74 tools registered");
+    TEST_BEGIN("all 76 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
     // Stage 6.26: 70, Stage 6.27 raster/beam (beam_state, screen_snapshot,
-    // raster_events) = 73, + debug_get_server_info (build provenance) = 74
-    CHECK_EQ(static_cast<int>(names.size()), 74, "should have 74 tools");
+    // raster_events) = 73, + debug_get_server_info (build provenance) = 74,
+    // + debug_get_int_events / debug_clear_int_events (RST 7 / INT log) = 76
+    CHECK_EQ(static_cast<int>(names.size()), 76, "should have 76 tools");
     // tools/list must reflect reality: no duplicates in registration
     std::set<std::string> unique(names.begin(), names.end());
     CHECK_EQ(static_cast<int>(unique.size()), static_cast<int>(names.size()),
@@ -134,6 +135,8 @@ void test_all_tools_registered() {
     for (const char *t : {"debug_get_beam_state",
                           "debug_get_screen_snapshot",
                           "debug_get_raster_events",
+                          "debug_get_int_events",
+                          "debug_clear_int_events",
                           "debug_get_server_info"}) {
         CHECK(unique.count(t) == 1, std::string("registered: ") + t);
     }
@@ -1375,7 +1378,7 @@ void test_mcp_get_server_info() {
     CHECK(!data["gitHash"].get<std::string>().empty(), "gitHash non-empty");
     CHECK(data["buildSeq"].get<int>() >= 0, "buildSeq numeric");
     CHECK(!data["buildTime"].get<std::string>().empty(), "buildTime non-empty");
-    CHECK_EQ(data["apiVersion"].get<int>(), 4, "api_version 4");
+    CHECK_EQ(data["apiVersion"].get<int>(), 5, "api_version 5");
     CHECK(data["pid"].get<int>() > 1, "pid plausible");
     CHECK(!data["startedAt"].get<std::string>().empty(), "startedAt non-empty");
     TEST_END();

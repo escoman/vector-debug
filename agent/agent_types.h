@@ -189,6 +189,28 @@ struct AgentRasterEvent
 };
 
 // ---------------------------------------------------------------------------
+// AgentInterruptEvent — hardware INT vectorized through RST 7
+//
+// Plain mirror of InterruptEvent across the Agent boundary (no debugger types
+// leak). Recorded only for real INT-line interrupts, so isHardware is always
+// true; a wake-from-HLT is flagged by wasHalt.
+// ---------------------------------------------------------------------------
+
+struct AgentInterruptEvent
+{
+    uint64_t seq = 0;
+    uint64_t frame = 0;
+    uint32_t vCycle = 0;
+    uint32_t rasterLine = 0;
+    uint32_t vCycleInLine = 0;
+    uint16_t retPc = 0;
+    uint16_t sp = 0;
+    uint16_t vector = 0;
+    bool     wasHalt = false;
+    bool     isHardware = true;
+};
+
+// ---------------------------------------------------------------------------
 // Safe maximum limits — Stage 6.3
 //
 // Prevent unbounded memory allocation from Agent API requests.
@@ -219,6 +241,9 @@ namespace AgentLimits {
     // -- Stage 6.27: raster / beam event limits ------------------------------
     static const size_t MAX_RASTER_EVENTS               = 50000;   // ring capacity
     static const size_t RASTER_EVENTS_DEFAULT_LIMIT     = 1000;    // default per-query cap
+    // -- Hardware interrupt (RST 7 / INT) event limits ----------------------
+    static const size_t MAX_INTERRUPT_EVENTS            = 50000;   // ring capacity
+    static const size_t INTERRUPT_EVENTS_DEFAULT_LIMIT  = 1000;    // default per-query cap
 }
 
 // ---------------------------------------------------------------------------

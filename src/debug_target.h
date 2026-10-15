@@ -90,6 +90,17 @@ public:
     }
     virtual void clearRasterEvents() {}
 
+    // -- Hardware interrupt events (RST 7 / INT line) -----------------------
+    // Recorded on the emulation thread from the emulator core's interrupt
+    // path. Default: unavailable (test targets have no interrupt source).
+    // maxResults caps the tail (0 = all).
+
+    virtual std::vector<InterruptEvent> getInterruptEvents(size_t maxResults) {
+        (void)maxResults;
+        return {};
+    }
+    virtual void clearInterruptEvents() {}
+
     // -- Palette ------------------------------------------------------------
 
     virtual PaletteSnapshot paletteSnapshot() const { return {}; }

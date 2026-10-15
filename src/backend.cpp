@@ -461,6 +461,7 @@ void DebugBackend::reset()
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
     impl_->ioHistory.clear();
+    clearInterruptEvents();
     impl_->clearStats();
     clearActivityCounters();
 }
@@ -481,6 +482,7 @@ void DebugBackend::restart()
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
     impl_->ioHistory.clear();
+    clearInterruptEvents();
     impl_->clearStats();
     clearActivityCounters();
 }
@@ -994,6 +996,7 @@ void DebugBackend::clearHistory()
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
     impl_->ioHistory.clear();
+    clearInterruptEvents();
 }
 
 void DebugBackend::clearIoHistory()
@@ -1580,6 +1583,21 @@ std::vector<RasterEvent> DebugBackend::rasterEvents(
 void DebugBackend::clearRasterEvents()
 {
     target_->clearRasterEvents();
+}
+
+// ---------------------------------------------------------------------------
+// Hardware interrupt events (RST 7 / INT) facade
+// ---------------------------------------------------------------------------
+
+std::vector<InterruptEvent> DebugBackend::interruptEventsSnapshot(size_t maxResults) const
+{
+    if (!target_) return {};
+    return target_->getInterruptEvents(maxResults);
+}
+
+void DebugBackend::clearInterruptEvents()
+{
+    if (target_) target_->clearInterruptEvents();
 }
 
 // ---------------------------------------------------------------------------

@@ -204,6 +204,32 @@ struct RasterEvent
 };
 
 // ---------------------------------------------------------------------------
+// Interrupt event — hardware INT vectorized through RST 7 (Stage 6.x)
+//
+// Recorded on the emulation thread from the emulator core's Board::oninterrupt
+// hook, i.e. the exact moment an INT line is sampled with INTE set and the CPU
+// takes the vector. This is the ONLY place a hardware interrupt is
+// distinguishable from a software `RST 7` executed in the code stream (both
+// land on 0x0038 and push PC identically), so is_hardware is always true here.
+// The beam position is decorated by the adapter from the live filler state,
+// matching the RasterEvent path.
+// ---------------------------------------------------------------------------
+
+struct InterruptEvent
+{
+    uint64_t seq          = 0;   // ordinal in this debug session
+    uint64_t frame        = 0;   // board frame counter at the INT
+    uint32_t vCycle       = 0;   // v_cycle within the frame
+    uint32_t rasterLine   = 0;
+    uint32_t vCycleInLine = 0;
+    uint16_t retPc        = 0;   // PC pushed by RST 7 = interrupted site
+    uint16_t sp           = 0;   // stack pointer before the return push
+    uint16_t vector       = 0;   // vector taken (0x0038 for RST 7)
+    bool     wasHalt      = false; // true: INT woke the CPU out of HLT
+    bool     isHardware   = true;  // source is the INT line, not a code RST
+};
+
+// ---------------------------------------------------------------------------
 // Debugger state machine
 // ---------------------------------------------------------------------------
 

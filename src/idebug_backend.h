@@ -155,6 +155,16 @@ public:
         int port, uint16_t pc, size_t maxResults) const = 0;
     virtual void clearRasterEvents() = 0;
 
+    // -- Hardware interrupt events (RST 7 / INT) ----------------------------
+    // Recorded from the emulator core's interrupt path. Default empty/no-op so
+    // test mocks without a real interrupt source need no change. maxResults
+    // caps the tail (0 = all).
+    virtual std::vector<InterruptEvent> interruptEventsSnapshot(size_t maxResults) const {
+        (void)maxResults;
+        return {};
+    }
+    virtual void clearInterruptEvents() {}
+
     // -- Palette ------------------------------------------------------------
 
     virtual PaletteSnapshot paletteSnapshot() const = 0;

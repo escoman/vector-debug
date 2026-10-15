@@ -55,6 +55,12 @@ public:
         return cachedEntries_[index];
     }
 
+    // --- Interrupt log test accessors ---
+    size_t cachedIntSize() const { return cachedIntEntries_.size(); }
+    const InterruptEvent &cachedIntEntry(size_t index) const {
+        return cachedIntEntries_[index];
+    }
+
     // Follow / Pause state (for tests)
     bool followIo() const { return followIo_; }
     void setFollowIo(bool v) { followIo_ = v; }
@@ -86,13 +92,16 @@ private:
     // Cached snapshots (refreshed when needsRefresh_ and !pauseCapture_)
     std::vector<IoAccessEvent> cachedEntries_;
     std::vector<InstructionEvent> cachedInstrEvents_;  // for PC resolution
+    std::vector<InterruptEvent> cachedIntEntries_;     // RST 7 / INT log
 
     // Auto-scroll tracking
     int lastDisplayedCount_ = -1;  // scroll only when count changes
+    int lastIntCount_ = -1;        // interrupt log auto-scroll tracking
 
     // Render sub-components
     void renderToolbar(IDebugBackend &backend);
     void renderIoTable(IDebugBackend &backend);
+    void renderInterruptLog(IDebugBackend &backend);
     void renderHardwareState(IDebugBackend &backend);
     void renderPalette(IDebugBackend &backend);
 

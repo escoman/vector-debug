@@ -70,6 +70,8 @@ public:
         uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
         int port, uint16_t pc, size_t maxResults) override;
     void clearRasterEvents() override;
+    std::vector<InterruptEvent> getInterruptEvents(size_t maxResults) override;
+    void clearInterruptEvents() override;
     PaletteSnapshot paletteSnapshot() const override;
     SoundSnapshot soundSnapshot() const override;
     void setMuted(bool muted) override;
@@ -208,6 +210,11 @@ private:
     // Stage 6.27 P2: OUT-with-beam-position events, recorded on the emulation
     // thread (io.onwrite) and read from the query thread via RingBuffer.
     RingBuffer<RasterEvent> rasterEvents_;
+
+    // Hardware interrupt (RST 7 / INT) events, recorded on the emulation
+    // thread via Board::oninterrupt and read from the query thread.
+    RingBuffer<InterruptEvent> interruptEvents_;
+    uint64_t interruptSeq_ = 0;   // emulation-thread-only ordinal counter
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnRead_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnWrite_;
 

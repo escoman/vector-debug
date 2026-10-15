@@ -122,6 +122,7 @@ DebugAdapter::DebugAdapter()
     , filler(memory, io, tv)
     , board(memory, io, filler, soundnik, tv, tape_player)
     , rasterEvents_(50000)
+    , interruptEvents_(50000)
 {
 }
 
@@ -166,6 +167,27 @@ void DebugAdapter::init()
     // Latin (ruslatState_ = false → LED off).
     io.onruslat = [this](bool rus) {
         ruslatState_ = rus;
+    };
+
+    // Hardware interrupt log: the emulator core calls this the instant it
+    // samples the INT line with INTE set and takes the RST 7 vector. Runs on
+    // the emulation thread, so filler.*/board.get_frame_no() are live — same
+    // correlation trick as io.onwrite. This is the only reliable source for
+    // distinguishing a hardware INT from a software `RST 7` in the code.
+    board.oninterrupt = [this](uint16_t retPc, bool wasHalt, uint16_t sp,
+                               uint16_t vector) {
+        InterruptEvent ev;
+        ev.seq           = ++interruptSeq_;
+        ev.frame         = static_cast<uint64_t>(board.get_frame_no());
+        ev.rasterLine    = static_cast<uint32_t>(filler.rasterLine());
+        ev.vCycleInLine  = static_cast<uint32_t>(filler.rasterPixel());
+        ev.vCycle        = ev.rasterLine * VideoTiming::lineVCycles + ev.vCycleInLine;
+        ev.retPc         = retPc;
+        ev.sp            = sp;
+        ev.vector        = vector;
+        ev.wasHalt       = wasHalt;
+        ev.isHardware    = true;
+        interruptEvents_.push(ev);
     };
 
     // Track i8253 timer writes and standard-noise (PIA PC0) transitions
@@ -603,6 +625,23 @@ std::vector<RasterEvent> DebugAdapter::getRasterEvents(
 void DebugAdapter::clearRasterEvents()
 {
     rasterEvents_.clear();
+}
+
+std::vector<InterruptEvent> DebugAdapter::getInterruptEvents(size_t maxResults)
+{
+    std::vector<InterruptEvent> all = interruptEvents_.snapshot();  // oldest->newest
+    // Cap to the most recent maxResults entries (tail). 0 = all.
+    if (maxResults != 0 && all.size() > maxResults) {
+        all.erase(all.begin(), all.begin() + (all.size() - maxResults));
+    }
+    return all;
+}
+
+void DebugAdapter::clearInterruptEvents()
+{
+    // Only drop the ring; interruptSeq_ stays monotonic because it is written
+    // on the emulation thread and must not be raced from the query thread.
+    interruptEvents_.clear();
 }
 
 PaletteSnapshot DebugAdapter::paletteSnapshot() const

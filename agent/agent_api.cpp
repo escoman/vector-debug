@@ -1757,6 +1757,54 @@ AgentApiResult<void> AgentApi::clearRasterEvents()
 }
 
 // ---------------------------------------------------------------------------
+// Hardware interrupt events (RST 7 / INT)
+//
+// Reads the backend interrupt ring and converts to plain AgentInterruptEvent
+// (no debugger types cross the Agent boundary).
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<AgentInterruptEvent>> AgentApi::getInterruptEvents(
+    size_t maxResults)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (maxResults > AgentLimits::MAX_INTERRUPT_EVENTS)
+        maxResults = AgentLimits::MAX_INTERRUPT_EVENTS;
+
+    auto evs = backend_.interruptEventsSnapshot(maxResults);
+
+    std::vector<AgentInterruptEvent> out;
+    out.reserve(evs.size());
+    for (const auto &e : evs) {
+        AgentInterruptEvent a;
+        a.seq           = e.seq;
+        a.frame         = e.frame;
+        a.vCycle        = e.vCycle;
+        a.rasterLine    = e.rasterLine;
+        a.vCycleInLine  = e.vCycleInLine;
+        a.retPc         = e.retPc;
+        a.sp            = e.sp;
+        a.vector        = e.vector;
+        a.wasHalt       = e.wasHalt;
+        a.isHardware    = e.isHardware;
+        out.push_back(a);
+    }
+
+    std::ostringstream oss;
+    oss << out.size() << " events";
+    log_.record("getInterruptEvents", "", oss.str(), elapsedMs(t0));
+    return AgentApiResult<std::vector<AgentInterruptEvent>>::ok(std::move(out));
+}
+
+AgentApiResult<void> AgentApi::clearInterruptEvents()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    backend_.clearInterruptEvents();
+    log_.record("clearInterruptEvents", "", "cleared", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+// ---------------------------------------------------------------------------
 // Annotations — through Backend command protocol (Stage 6.3: AgentApiResult<void>)
 // ---------------------------------------------------------------------------
 

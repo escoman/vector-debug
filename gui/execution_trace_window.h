@@ -48,11 +48,11 @@ public:
         return cachedEntries_[index];
     }
 
-    // Follow / Pause state (for tests)
+    // Follow / Live state (for tests)
     bool followExecution() const { return followExecution_; }
     void setFollowExecution(bool v) { followExecution_ = v; }
-    bool pauseCapture() const { return pauseCapture_; }
-    void setPauseCapture(bool v) { pauseCapture_ = v; }
+    bool live() const { return live_; }
+    void setLive(bool v) { live_ = v; }
 
     // Max display entries
     int maxEntries() const { return maxEntries_; }
@@ -61,12 +61,12 @@ public:
 private:
     bool visible_ = true;
     bool followExecution_ = true;
-    bool pauseCapture_ = false;
+    bool live_     = false;   // OFF by default: don't fetch snapshot until user opts in
     bool needsRefresh_ = true;
     int  maxEntries_ = 1000;          // display limit (user-configurable)
     char searchBuffer_[64] = "";
 
-    // Cached snapshot (refreshed when needsRefresh_ and !pauseCapture_)
+    // Cached snapshot (fetched when needsRefresh_ && live_)
     std::vector<InstructionEvent> cachedEntries_;
     uint64_t lastSnapshotSeq_ = 0;    // detect new data from backend
 

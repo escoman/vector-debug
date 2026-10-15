@@ -61,11 +61,11 @@ public:
         return cachedIntEntries_[index];
     }
 
-    // Follow / Pause state (for tests)
+    // Follow / Live state (for tests)
     bool followIo() const { return followIo_; }
     void setFollowIo(bool v) { followIo_ = v; }
-    bool pauseCapture() const { return pauseCapture_; }
-    void setPauseCapture(bool v) { pauseCapture_ = v; }
+    bool live() const { return live_; }
+    void setLive(bool v) { live_ = v; }
 
     // Max display entries
     int maxEntries() const { return maxEntries_; }
@@ -80,7 +80,7 @@ public:
 private:
     bool visible_ = true;
     bool followIo_ = true;
-    bool pauseCapture_ = false;
+    bool live_     = false;   // OFF by default: don't poll backend unless user opts in
     bool needsRefresh_ = true;
     int  maxEntries_ = 100;           // display limit (user-configurable)
 
@@ -89,7 +89,7 @@ private:
     int portFilter_ = -1;             // -1 = all ports, 0..255 = specific port
     int portInput_ = -1;              // pending input value (before Apply)
 
-    // Cached snapshots (refreshed when needsRefresh_ and !pauseCapture_)
+    // Cached snapshots (refreshed every frame when live_ is true)
     std::vector<IoAccessEvent> cachedEntries_;
     std::vector<InstructionEvent> cachedInstrEvents_;  // for PC resolution
     std::vector<InterruptEvent> cachedIntEntries_;     // RST 7 / INT log

@@ -40,9 +40,9 @@ void IoInspectorWindow::render(IDebugBackend &backend)
     }
 
     // Refresh snapshots:
-    // - pauseCapture_ OFF → always fetch fresh data from backend each frame
-    // - pauseCapture_ ON  → freeze current display (no new snapshots)
-    if (!pauseCapture_) {
+    // - live_ OFF (default) → don't poll backend, keep last cache
+    // - live_ ON            → fetch fresh snapshots every frame
+    if (live_) {
         cachedEntries_     = backend.ioHistorySnapshot();
         cachedInstrEvents_ = backend.instructionHistorySnapshot();
         cachedIntEntries_  = backend.interruptEventsSnapshot(
@@ -84,8 +84,8 @@ void IoInspectorWindow::renderToolbar(IDebugBackend &backend)
     ImGui::Checkbox("Follow I/O", &followIo_);
 
     ImGui::SameLine();
-    // Pause Capture checkbox
-    ImGui::Checkbox("Pause Capture", &pauseCapture_);
+    // Live checkbox: when ON, poll backend snapshots every frame
+    ImGui::Checkbox("Live", &live_);
 
     ImGui::SameLine();
     // Clear button — clears I/O and interrupt history

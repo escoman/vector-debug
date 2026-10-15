@@ -26,15 +26,14 @@ void ExecutionTraceWindow::render(IDebugBackend &backend)
     }
 
     // Refresh snapshot if needed
-    if (needsRefresh_ && !pauseCapture_) {
-        uint64_t currentSeq = backend.instructionSequence();
-        if (currentSeq != lastSnapshotSeq_ || cachedEntries_.empty()) {
-            cachedEntries_ = backend.instructionHistorySnapshot();
-            lastSnapshotSeq_ = currentSeq;
+    if (needsRefresh_) {
+        if (live_) {
+            uint64_t currentSeq = backend.instructionSequence();
+            if (currentSeq != lastSnapshotSeq_ || cachedEntries_.empty()) {
+                cachedEntries_ = backend.instructionHistorySnapshot();
+                lastSnapshotSeq_ = currentSeq;
+            }
         }
-        needsRefresh_ = false;
-    } else if (needsRefresh_ && pauseCapture_) {
-        // Pause Capture: don't fetch new data, just clear the refresh flag
         needsRefresh_ = false;
     }
 
@@ -59,8 +58,13 @@ void ExecutionTraceWindow::renderToolbar(IDebugBackend &backend)
     ImGui::Checkbox("Follow Execution", &followExecution_);
 
     ImGui::SameLine();
-    // Pause Capture checkbox
-    ImGui::Checkbox("Pause Capture", &pauseCapture_);
+    // Live checkbox: when ON, snapshot fetch is allowed on refresh triggers
+    if (ImGui::Checkbox("Live", &live_)) {
+        if (live_) {
+            // Just enabled: fetch immediately so the table isn't empty
+            needsRefresh_ = true;
+        }
+    }
 
     ImGui::SameLine();
     // Clear button

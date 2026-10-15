@@ -936,8 +936,8 @@ static void test_board_smoke()
     // Test IoInspectorWindow state
     ioWin.setFollowIo(false);
     CHECK(!ioWin.followIo(), "followIo == false");
-    ioWin.setPauseCapture(true);
-    CHECK(ioWin.pauseCapture(), "pauseCapture == true");
+    ioWin.setLive(true);
+    CHECK(ioWin.live(), "live == true");
     ioWin.setTypeFilter(IoInspectorWindow::TypeFilter::Out);
     CHECK((int)ioWin.typeFilter() == (int)IoInspectorWindow::TypeFilter::Out,
           "typeFilter == Out");

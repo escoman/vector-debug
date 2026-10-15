@@ -12,7 +12,6 @@
 #include "memory_access_window.h"
 #include "functions_window.h"
 #include "xrefs_window.h"
-#include "search_window.h"
 #include "keyboard_window.h"
 #include "rom_file_dialog.h"
 #include "sound_window.h"
@@ -84,7 +83,6 @@ private:
     void renderToolbar(IDebugBackend &backend);
     void renderCpuPanel(IDebugBackend &backend);
     void renderCurrentInstruction(uint16_t pc, IDebugBackend &backend);
-    void renderInstructionHistory(IDebugBackend &backend);
     void renderStatusBar(IDebugBackend &backend);
     void renderControls(IDebugBackend &backend);
     //! Ask every view to re-read its state after a machine reset
@@ -130,9 +128,6 @@ private:
     // Xrefs window (Stage 4.7)
     XrefsWindow xrefsWindow_;
     
-    // Search window (Stage 4.8)
-    SearchWindow searchWindow_;
-    
     // Keyboard window (Stage 5.3)
     KeyboardWindow keyboardWindow_;
     
@@ -144,10 +139,6 @@ private:
     
     // VRAM Plane Screen window
     PlaneScreenWindow planeScreen_;
-    
-    // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
-    std::vector<InstructionEvent> cachedHistEntries_;
-    bool histNeedsRefresh_ = true;
 
     // Open ROM dialog state
     bool showOpenRomDialog_ = false;
@@ -181,7 +172,6 @@ private:
 
     // Dockable panel visibility (Stage 5.0)
     bool showCpuRegisters_      = true;
-    bool showInstructionHistory_ = true;
 
     // Workspace Manager (Stage 5.1)
     WorkspaceManager workspaceManager_;

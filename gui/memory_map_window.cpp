@@ -160,16 +160,6 @@ void MemoryMapWindow::render(IDebugBackend &backend)
     // -- Toolbar -------------------------------------------------------------
 
     ImGui::Checkbox("Live", &live_);
-    ImGui::SameLine();
-    if (ImGui::Button("Refresh")) {
-        scanPending_ = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
-        clearActivity();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("256 blocks");
 
     ImGui::Separator();
 

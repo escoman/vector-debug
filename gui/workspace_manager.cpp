@@ -612,14 +612,12 @@ void WorkspaceManager::buildDefaultLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("Disassembly", centerTop);
     ImGui::DockBuilderDockWindow("Execution Trace", centerBottom);
     ImGui::DockBuilderDockWindow("Memory Inspector", rightTop);
-    ImGui::DockBuilderDockWindow("Instruction History", rightBottom);
     ImGui::DockBuilderDockWindow("Vector Screen", rightBottom);
     ImGui::DockBuilderDockWindow("Breakpoints", centerBottom);
     ImGui::DockBuilderDockWindow("Memory Map", rightTop);
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
     ImGui::DockBuilderDockWindow("Functions", centerTop);
     ImGui::DockBuilderDockWindow("Cross References", centerTop);
-    ImGui::DockBuilderDockWindow("Search", rightTop);
     ImGui::DockBuilderDockWindow("Keyboard", leftBottom);
 }
 
@@ -649,14 +647,12 @@ void WorkspaceManager::buildScreenAnalysisLayout(unsigned int dockspaceId)
     // Right: Memory Inspector + Memory Map
     ImGui::DockBuilderDockWindow("Memory Inspector", rightTop);
     ImGui::DockBuilderDockWindow("Memory Map", rightTop);
-    ImGui::DockBuilderDockWindow("Search", rightTop);
 
     // Bottom extras
     ImGui::DockBuilderDockWindow("CPU Registers", leftTop);
     ImGui::DockBuilderDockWindow("Stack View", leftBottom);
     ImGui::DockBuilderDockWindow("Breakpoints", leftBottom);
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
-    ImGui::DockBuilderDockWindow("Instruction History", leftBottom);
     ImGui::DockBuilderDockWindow("Cross References", leftTop);
 }
 
@@ -687,14 +683,12 @@ void WorkspaceManager::buildCpuAnalysisLayout(unsigned int dockspaceId)
     // Right: Execution Trace + Breakpoints
     ImGui::DockBuilderDockWindow("Execution Trace", rightTop);
     ImGui::DockBuilderDockWindow("Breakpoints", rightBottom);
-    ImGui::DockBuilderDockWindow("Instruction History", rightTop);
 
     // Remaining
     ImGui::DockBuilderDockWindow("Memory Inspector", rightBottom);
     ImGui::DockBuilderDockWindow("Memory Map", rightBottom);
     ImGui::DockBuilderDockWindow("Vector Screen", rightBottom);
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
-    ImGui::DockBuilderDockWindow("Search", rightBottom);
 }
 
 void WorkspaceManager::buildIoAnalysisLayout(unsigned int dockspaceId)
@@ -726,9 +720,7 @@ void WorkspaceManager::buildIoAnalysisLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("Memory Inspector", bottomRight);
     ImGui::DockBuilderDockWindow("Memory Map", bottomRight);
     ImGui::DockBuilderDockWindow("Breakpoints", bottomRight);
-    ImGui::DockBuilderDockWindow("Instruction History", bottomLeft);
     ImGui::DockBuilderDockWindow("Cross References", topRight);
-    ImGui::DockBuilderDockWindow("Search", bottomRight);
 }
 
 void WorkspaceManager::buildMemoryAnalysisLayout(unsigned int dockspaceId)
@@ -749,7 +741,6 @@ void WorkspaceManager::buildMemoryAnalysisLayout(unsigned int dockspaceId)
     // Left: Memory Inspector + Stack
     ImGui::DockBuilderDockWindow("Memory Inspector", leftTop);
     ImGui::DockBuilderDockWindow("Stack View", leftBottom);
-    ImGui::DockBuilderDockWindow("Search", leftTop);
 
     // Center: Memory Map (large)
     ImGui::DockBuilderDockWindow("Memory Map", center);
@@ -764,6 +755,5 @@ void WorkspaceManager::buildMemoryAnalysisLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("Execution Trace", rightBottom);
     ImGui::DockBuilderDockWindow("Breakpoints", rightBottom);
     ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
-    ImGui::DockBuilderDockWindow("Instruction History", leftBottom);
     ImGui::DockBuilderDockWindow("Cross References", rightTop);
 }

@@ -234,7 +234,6 @@ void DebuggerGui::refreshAfterReset()
     functionsWindow_.requestRefresh();
     romDatabaseWindow_.requestRefresh();
     xrefsWindow_.requestRefresh();
-    histNeedsRefresh_ = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,15 +316,6 @@ void DebuggerGui::render(IDebugBackend &backend)
             renderCpuPanel(backend);
             ImGui::Separator();
             renderCurrentInstruction(cpu.pc, backend);
-        }
-        ImGui::End();
-    }
-
-    // --- Instruction History window (dockable) ---
-    if (showInstructionHistory_) {
-        ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Instruction History", &showInstructionHistory_)) {
-            renderInstructionHistory(backend);
         }
         ImGui::End();
     }
@@ -445,9 +435,6 @@ void DebuggerGui::render(IDebugBackend &backend)
     
     xrefsWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     
-    searchWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
-    searchWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
-    
     // Stage 4 Enhanced: Vector Screen navigation callbacks
     vectorScreen_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     vectorScreen_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
@@ -470,7 +457,6 @@ void DebuggerGui::render(IDebugBackend &backend)
     functionsWindow_.render(backend);
     romDatabaseWindow_.render(backend);
     xrefsWindow_.render(backend);
-    searchWindow_.render(backend);
     keyboardWindow_.render(backend);
     // A virtual ВВОД/СБР key resets the machine — same follow-up as the
     // F11/F12 hotkeys.
@@ -486,7 +472,6 @@ void DebuggerGui::render(IDebugBackend &backend)
     if (!visRegsRegistered) {
         workspaceManager_.setWindowVisibilityRefs({
             {"CPU Registers", &showCpuRegisters_},
-            {"Instruction History", &showInstructionHistory_},
             {"Vector Screen", &vectorScreen_.getVisibleRef()},
             {"Memory Inspector", &memoryInspector_.getVisibleRef()},
             {"Memory Map", &memoryMap_.getVisibleRef()},
@@ -499,7 +484,6 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"MAP-file Info", &functionsWindow_.getVisibleRef()},
             {"ROM Database", &romDatabaseWindow_.getVisibleRef()},
             {"Cross References", &xrefsWindow_.getVisibleRef()},
-            {"Search", &searchWindow_.getVisibleRef()},
             {"Keyboard", &keyboardWindow_.getVisibleRef()},
             {"Sound", &soundWindow_.getVisibleRef()},
             {"VRAM Planes", &planeScreen_.getVisibleRef()},
@@ -720,53 +704,6 @@ void DebuggerGui::renderCurrentInstruction(uint16_t pc, IDebugBackend &backend)
 }
 
 // ---------------------------------------------------------------------------
-// Instruction History
-// ---------------------------------------------------------------------------
-
-void DebuggerGui::renderInstructionHistory(IDebugBackend &backend)
-{
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Instruction History");
-    ImGui::Spacing();
-
-    // Stage 3.12: refresh cache only when needed (avoid per-frame snapshot)
-    if (histNeedsRefresh_) {
-        cachedHistEntries_ = backend.instructionHistorySnapshot();
-        histNeedsRefresh_ = false;
-    }
-
-    if (cachedHistEntries_.empty()) {
-        ImGui::TextDisabled("(no instructions executed)");
-        return;
-    }
-
-    // Show last N instructions (scrollable region).
-    ImGui::BeginChild("HistoryScroll", ImVec2(0, 0), ImGuiChildFlags_None,
-                       ImGuiWindowFlags_None);
-
-    for (size_t i = 0; i < cachedHistEntries_.size(); ++i) {
-        const auto &ev = cachedHistEntries_[i];
-        bool isLast = (i == cachedHistEntries_.size() - 1);
-
-        if (isLast) {
-            // Highlight the most recent instruction.
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
-        }
-
-        ImGui::Text("%04X  %02X  seq=%llu",
-                     ev.pcBefore, ev.opcode,
-                     (unsigned long long)ev.sequence);
-
-        if (isLast) {
-            ImGui::PopStyleColor();
-            // Auto-scroll to the last item.
-            ImGui::SetScrollHereY(1.0f);
-        }
-    }
-
-    ImGui::EndChild();
-}
-
-// ---------------------------------------------------------------------------
 // Toolbar — menu bar with File, View menus and debug controls (Stage 5.0)
 // ---------------------------------------------------------------------------
 
@@ -816,7 +753,6 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
         // View menu — window visibility toggles + layout
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("CPU Registers", nullptr, &showCpuRegisters_);
-            ImGui::MenuItem("Instruction History", nullptr, &showInstructionHistory_);
             ImGui::Separator();
             ImGui::MenuItem("Vector Screen", nullptr, &vectorScreen_.getVisibleRef());
             ImGui::MenuItem("Memory Inspector", nullptr, &memoryInspector_.getVisibleRef());
@@ -830,7 +766,6 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("MAP-file Info", nullptr, &functionsWindow_.getVisibleRef());
             ImGui::MenuItem("ROM Database", nullptr, &romDatabaseWindow_.getVisibleRef());
             ImGui::MenuItem("Cross References", nullptr, &xrefsWindow_.getVisibleRef());
-            ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
             ImGui::MenuItem("Keyboard", nullptr, &keyboardWindow_.getVisibleRef());
             ImGui::MenuItem("Sound", nullptr, &soundWindow_.getVisibleRef());
             ImGui::MenuItem("VRAM Planes", nullptr, &planeScreen_.getVisibleRef());
@@ -910,7 +845,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        histNeedsRefresh_ = true;
     }
     if (!paused) ImGui::EndDisabled();
     ImGui::SameLine();
@@ -935,7 +869,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        histNeedsRefresh_ = true;
     }
     if (!paused) ImGui::EndDisabled();
     ImGui::SameLine();
@@ -952,7 +885,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        histNeedsRefresh_ = true;
     }
     if (!running) ImGui::EndDisabled();
     ImGui::SameLine();
@@ -967,7 +899,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         executionTrace_.requestRefresh();
         ioInspector_.requestRefresh();
         vectorScreen_.requestRefresh();
-        histNeedsRefresh_ = true;
     }
     ImGui::SameLine();
 
@@ -981,7 +912,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         executionTrace_.requestRefresh();
         ioInspector_.requestRefresh();
         vectorScreen_.requestRefresh();
-        histNeedsRefresh_ = true;
     }
 }
 
@@ -995,7 +925,6 @@ void DebuggerGui::layoutCascade()
     struct WinInfo { const char *name; bool *visible; };
     WinInfo wins[] = {
         {"CPU Registers", &showCpuRegisters_},
-        {"Instruction History", &showInstructionHistory_},
         {"Vector Screen", &vectorScreen_.getVisibleRef()},
         {"Memory Inspector", &memoryInspector_.getVisibleRef()},
         {"Memory Map", &memoryMap_.getVisibleRef()},
@@ -1007,7 +936,6 @@ void DebuggerGui::layoutCascade()
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
         {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
-        {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
         {"VRAM Planes", &planeScreen_.getVisibleRef()},
@@ -1033,7 +961,6 @@ void DebuggerGui::applyCascade()
     struct WinInfo { const char *name; bool *visible; };
     WinInfo wins[] = {
         {"CPU Registers", &showCpuRegisters_},
-        {"Instruction History", &showInstructionHistory_},
         {"Vector Screen", &vectorScreen_.getVisibleRef()},
         {"Memory Inspector", &memoryInspector_.getVisibleRef()},
         {"Memory Map", &memoryMap_.getVisibleRef()},
@@ -1045,7 +972,6 @@ void DebuggerGui::applyCascade()
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
         {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
-        {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
         {"VRAM Planes", &planeScreen_.getVisibleRef()},
@@ -1076,7 +1002,6 @@ void DebuggerGui::layoutTile()
     std::vector<WinInfo> visible;
     WinInfo all[] = {
         {"CPU Registers", &showCpuRegisters_},
-        {"Instruction History", &showInstructionHistory_},
         {"Vector Screen", &vectorScreen_.getVisibleRef()},
         {"Memory Inspector", &memoryInspector_.getVisibleRef()},
         {"Memory Map", &memoryMap_.getVisibleRef()},
@@ -1088,7 +1013,6 @@ void DebuggerGui::layoutTile()
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
         {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
-        {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
         {"VRAM Planes", &planeScreen_.getVisibleRef()},
@@ -1206,7 +1130,6 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         romDatabaseWindow_.requestRefresh();
-        histNeedsRefresh_ = true;
     } else {
         snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
                  "Failed to load: %s", romPath.c_str());

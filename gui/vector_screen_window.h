@@ -8,16 +8,17 @@
 class IDebugBackend;
 
 // ---------------------------------------------------------------------------
-// Vector Screen Window — Enhanced with zoom, pan, VRAM debug
+// Vector Screen Window — live Vector-06C framebuffer view
 //
-// Displays the live Vector-06C framebuffer with:
 //   - Zoom 1x–16x (nearest-neighbor, no smoothing)
-//   - Pan (middle mouse drag when zoomed)
+//   - Pan (left mouse drag when zoomed)
 //   - Screen coordinate display (X/Y in Vector pixels)
-//   - VRAM address mapping
-//   - VRAM Debug Mode (byte grid, write highlights, write count)
+//   - VRAM address mapping (for context-menu navigation)
 //   - Live / Capture mode
 //   - Context menu (Go to VRAM, Memory Inspector, Disassembly)
+//
+// Byte-level VRAM inspection (grid, addresses, write highlighting) lives in
+// the separate "VRAM Planes" window (see plane_screen_window.h).
 // ---------------------------------------------------------------------------
 
 class VectorScreenWindow
@@ -72,14 +73,6 @@ private:
     std::vector<uint32_t> capturedPixels_;
     int capturedWidth_ = 0, capturedHeight_ = 0;
 
-    // -- VRAM Debug Mode -----------------------------------------------------
-    bool vramDebugMode_ = false;
-    bool showByteGrid_ = true;
-    bool showAddress_ = true;
-    bool showChangedBytes_ = true;
-    bool showWriteCount_ = false;
-    bool showLastWrite_ = true;
-
     // -- Texture -------------------------------------------------------------
     unsigned int textureId_ = 0;
     int texWidth_  = 0;
@@ -94,23 +87,15 @@ private:
     int hoverScreenX_ = -1, hoverScreenY_ = -1;   // visible-area coordinates
     bool hoverBorder_ = false;                     // mouse over border area
 
-    // -- Write highlight overlay ---------------------------------------------
-    std::vector<uint64_t> prevWriteCounts_;   // previous per-address write counts
-    std::vector<uint8_t>  changedFlags_;      // 256 bytes: 1 = recently changed
-    int highlightFadeFrames_ = 120;            // ~2 seconds at 60fps
-    int highlightTimer_ = 0;                   // countdown
-
     // -- Sub-render methods --------------------------------------------------
     void renderToolbar(IDebugBackend &backend);
     void renderScreen(IDebugBackend &backend);
     void renderCoordinateInfo(IDebugBackend &backend);
-    void renderVramDebugOverlay(IDebugBackend &backend);
     void renderContextMenu(IDebugBackend &backend);
 
     // -- Helpers -------------------------------------------------------------
     void handleZoomInput();
     void handlePanInput(int visibleW, int visibleH, int zoomFactor,
                         float regionW, float regionH);
-    void updateWriteHighlights(IDebugBackend &backend);
     void captureCurrentFrame(IDebugBackend &backend);
 };

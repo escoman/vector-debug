@@ -108,44 +108,6 @@ void VectorScreenWindow::clampPan(int visibleW, int visibleH, int zoomFactor,
 }
 
 // ---------------------------------------------------------------------------
-// Write highlight detection
-// ---------------------------------------------------------------------------
-
-void VectorScreenWindow::updateWriteHighlights(IDebugBackend &backend)
-{
-    auto activity = backend.activitySnapshot();
-
-    if (prevWriteCounts_.empty()) {
-        // First call — just store current counts
-        prevWriteCounts_ = activity.writeCount;
-        changedFlags_.assign(256, 0);
-        return;
-    }
-
-    bool anyChanged = false;
-    changedFlags_.assign(256, 0);
-
-    // Check VRAM range 0xC000..0xC0FF for new writes
-    for (int i = 0; i < 256; ++i) {
-        uint16_t addr = 0xC000 + i;
-        if (activity.writeCount[addr] > prevWriteCounts_[addr]) {
-            changedFlags_[i] = 1;
-            anyChanged = true;
-        }
-    }
-
-    if (anyChanged) {
-        highlightTimer_ = highlightFadeFrames_;
-    }
-
-    if (highlightTimer_ > 0) {
-        highlightTimer_--;
-    }
-
-    prevWriteCounts_ = activity.writeCount;
-}
-
-// ---------------------------------------------------------------------------
 // Capture current frame
 // ---------------------------------------------------------------------------
 
@@ -206,36 +168,6 @@ void VectorScreenWindow::renderToolbar(IDebugBackend &backend)
             liveMode_ = false;
         } else {
             liveMode_ = true;
-        }
-    }
-
-    ImGui::SameLine();
-    ImGui::Text("|");
-
-    // VRAM Debug Mode
-    ImGui::SameLine();
-    ImGui::Checkbox("VRAM Debug", &vramDebugMode_);
-
-    if (vramDebugMode_) {
-        ImGui::SameLine();
-        ImGui::Text("|");
-        ImGui::SameLine();
-        ImGui::Checkbox("Grid", &showByteGrid_);
-        ImGui::SameLine();
-        ImGui::Checkbox("Addr", &showAddress_);
-        ImGui::SameLine();
-        ImGui::Checkbox("Changed", &showChangedBytes_);
-        ImGui::SameLine();
-        ImGui::Checkbox("WrCount", &showWriteCount_);
-
-        ImGui::SameLine();
-        ImGui::Text("|");
-        ImGui::SameLine();
-        if (ImGui::Button("Clear Activity")) {
-            backend.clearActivityCounters();
-            changedFlags_.assign(256, 0);
-            highlightTimer_ = 0;
-            prevWriteCounts_.clear();
         }
     }
 }
@@ -334,151 +266,6 @@ void VectorScreenWindow::renderContextMenu(IDebugBackend &backend)
 }
 
 // ---------------------------------------------------------------------------
-// VRAM Debug overlay (drawn on top of the screen image)
-// ---------------------------------------------------------------------------
-
-void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
-{
-    if (!vramDebugMode_) return;
-
-    auto video = backend.videoModeSnapshot();
-
-    // Framebuffer layout: 576x288 with 512-pixel visible area
-    const int fbVisW = 512;
-    const int fbVisH = 256;
-    const int fbBorderL = (video.screenWidth  - fbVisW) / 2;
-    const int fbBorderT = (video.screenHeight - fbVisH) / 2;
-    int displayPPB = video.pixelsPerByte * fbVisW / video.visibleWidth;
-
-    VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
-        video.mode512, video.screenWidth, video.screenHeight,
-        fbVisW, fbVisH,
-        fbBorderL, fbBorderT,
-        video.scrollValue, video.vramBase, displayPPB);
-
-    int zoom = currentZoom();
-    if (zoom < 8) return;  // Byte grid only at high zoom
-
-    // Get the drawing cursor position (top-left of the image region)
-    ImVec2 imgMin = ImGui::GetItemRectMin();
-    ImVec2 imgMax = ImGui::GetItemRectMax();
-
-    ImDrawList *drawList = ImGui::GetWindowDrawList();
-
-    // The image now includes borders.  The visible screen area starts at
-    // (fbBorderL, fbBorderT) within the image.
-    int visW = fbVisW;
-    int visH = fbVisH;
-    int ppb  = displayPPB;
-
-    // Bytes per row in visible area
-    int bytesPerRow = visW / ppb;  // 32 for 256-mode, 128 for 512-mode
-    int bytesPerCol = visH;         // 256
-
-    // Cell size in pixels
-    float cellW = static_cast<float>(ppb * zoom);
-    float cellH = static_cast<float>(zoom);
-
-    // Get activity snapshot for write counts and changed detection
-    IDebugBackend::ActivitySnapshot activity;
-    IDebugBackend::VramWriteSnapshot vramSnap;
-    if (showChangedBytes_ || showWriteCount_) {
-        activity = backend.activitySnapshot();
-    }
-    if (showLastWrite_) {
-        vramSnap = backend.vramWriteSnapshot();
-    }
-
-    // Offset to the start of the visible screen area within the image
-    float borderOffsetX = static_cast<float>(fbBorderL * zoom);
-    float borderOffsetY = static_cast<float>(fbBorderT * zoom);
-
-    // The visible area rect in screen coordinates
-    float visMinX = imgMin.x + borderOffsetX;
-    float visMinY = imgMin.y + borderOffsetY;
-    float visMaxX = visMinX + visW * static_cast<float>(zoom);
-    float visMaxY = visMinY + visH * static_cast<float>(zoom);
-
-    // Clip to the actual image widget bounds
-    visMinX = std::max(visMinX, imgMin.x);
-    visMinY = std::max(visMinY, imgMin.y);
-    visMaxX = std::min(visMaxX, imgMax.x);
-    visMaxY = std::min(visMaxY, imgMax.y);
-
-    // Calculate the offset due to pan (for the visible-area grid)
-    float gridStartX = visMinX - panX_;
-    float gridStartY = visMinY - panY_;
-
-    // Draw byte grid lines (clipped to the visible screen area)
-    if (showByteGrid_) {
-        ImU32 gridColor = IM_COL32(128, 128, 128, 80);
-
-        // Vertical lines (byte column boundaries)
-        for (int col = 0; col <= bytesPerRow; ++col) {
-            float x = gridStartX + col * cellW;
-            if (x < visMinX || x > visMaxX) continue;
-            drawList->AddLine(ImVec2(x, visMinY), ImVec2(x, visMaxY), gridColor);
-        }
-
-        // Horizontal lines (one per scanline)
-        // Only draw every 8th line to avoid clutter
-        int lineStep = (zoom >= 16) ? 1 : 8;
-        for (int row = 0; row <= bytesPerCol; row += lineStep) {
-            float y = gridStartY + row * cellH;
-            if (y < visMinY || y > visMaxY) continue;
-            drawList->AddLine(ImVec2(visMinX, y), ImVec2(visMaxX, y), gridColor);
-        }
-    }
-
-    // Draw changed byte highlights and write counts (within visible screen area)
-    if (showChangedBytes_ && highlightTimer_ > 0) {
-        float alpha = static_cast<float>(highlightTimer_) / highlightFadeFrames_;
-        ImU32 highlightColor = ImGui::ColorConvertFloat4ToU32(
-            ImVec4(0.0f, 1.0f, 0.0f, 0.3f * alpha));
-
-        for (int row = 0; row < 256; ++row) {
-            for (int col = 0; col < bytesPerRow; ++col) {
-                uint16_t addr = static_cast<uint16_t>(0xC000 + col * 256 + row);
-                int idx = addr - 0xC000;
-                if (idx >= 0 && idx < 256 && changedFlags_[idx]) {
-                    float x0 = gridStartX + col * cellW;
-                    float y0 = gridStartY + row * cellH;
-                    float x1 = x0 + cellW;
-                    float y1 = y0 + cellH;
-                    // Clip to visible screen region
-                    if (x1 > visMinX && x0 < visMaxX &&
-                        y1 > visMinY && y0 < visMaxY) {
-                        drawList->AddRectFilled(
-                            ImVec2(std::max(x0, visMinX), std::max(y0, visMinY)),
-                            ImVec2(std::min(x1, visMaxX), std::min(y1, visMaxY)),
-                            highlightColor);
-                    }
-                }
-            }
-        }
-    }
-
-    // Draw VRAM addresses (only at very high zoom)
-    if (showAddress_ && zoom >= 16 && cellW >= 40) {
-        for (int row = 0; row < 256; row += 8) {
-            for (int col = 0; col < bytesPerRow; ++col) {
-                uint16_t addr = static_cast<uint16_t>(0xC000 + col * 256 + row);
-                float x = gridStartX + col * cellW + 2;
-                float y = gridStartY + row * cellH + 2;
-
-                // Clip
-                if (x + 30 < visMinX || x > visMaxX ||
-                    y + 10 < visMinY || y > visMaxY) continue;
-
-                char buf[8];
-                snprintf(buf, sizeof(buf), "%04X", addr);
-                drawList->AddText(ImVec2(x, y), IM_COL32(255, 255, 0, 180), buf);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Screen rendering (main area)
 // ---------------------------------------------------------------------------
 
@@ -572,12 +359,6 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
         static_cast<ImTextureID>(static_cast<uint64_t>(textureId_)),
         imgPos, imgEnd,
         ImVec2(u0, v0), ImVec2(u1, v1));
-
-    // VRAM debug overlay (drawn on top)
-    // We need to set the cursor to the image position for overlay rendering
-    ImGui::SetCursorScreenPos(imgPos);
-    ImGui::Dummy(imageSize);  // invisible item to set rect bounds
-    renderVramDebugOverlay(backend);
 
     ImGui::PopClipRect();
 
@@ -703,11 +484,6 @@ void VectorScreenWindow::render(IDebugBackend &backend)
         if (!capturedPixels_.empty() && textureId_ == 0) {
             updateTexture(capturedPixels_.data(), capturedWidth_, capturedHeight_);
         }
-    }
-
-    // Update write highlights
-    if (vramDebugMode_) {
-        updateWriteHighlights(backend);
     }
 
     // Render screen area

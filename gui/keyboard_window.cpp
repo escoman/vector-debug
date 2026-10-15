@@ -337,7 +337,6 @@ void KeyboardWindow::render(IDebugBackend &backend)
     if (mouseClicked && hoveredScancode != 0) {
         bool isSticky = (hoveredScancode == SC_LSHIFT ||
                          hoveredScancode == SC_LCTRL);
-        bool isRuslat = (hoveredScancode == SC_F6);
         bool isBlk = (hoveredScancode == SC_BLK);
         if (isBlk) {
             // БЛК: latches like СС/УС, but is a pure system key — nothing is
@@ -355,14 +354,6 @@ void KeyboardWindow::render(IDebugBackend &backend)
             } else {
                 stickyKeys_.insert(hoveredScancode);
                 backend.pressKey(hoveredScancode);
-            }
-        } else if (isRuslat) {
-            // РУС/LAT: hold F6 for several frames so the ROM can detect it.
-            // The ROM scans keyboard periodically; a single-frame pulse
-            // may be missed between scans.
-            if (ruslatHoldTimer_ <= 0.0f) {
-                backend.pressKey(SC_F6);
-                ruslatHoldTimer_ = 0.15f; // ~8 frames at 50 Hz
             }
         } else if (isResetKey(hoveredScancode)) {
             // ВВОД/СБР alone do nothing on a real Vector — they reset the
@@ -386,15 +377,6 @@ void KeyboardWindow::render(IDebugBackend &backend)
     if (selectionTimer_ > 0.0f) {
         selectionTimer_ -= ImGui::GetIO().DeltaTime;
         if (selectionTimer_ < 0.0f) selectionTimer_ = 0.0f;
-    }
-
-    // Release РУС/LAT (F6) after hold timer expires
-    if (ruslatHoldTimer_ > 0.0f) {
-        ruslatHoldTimer_ -= ImGui::GetIO().DeltaTime;
-        if (ruslatHoldTimer_ <= 0.0f) {
-            ruslatHoldTimer_ = 0.0f;
-            backend.releaseKey(SC_F6);
-        }
     }
 
     // --- Draw keys ---

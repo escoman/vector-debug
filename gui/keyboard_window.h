@@ -72,7 +72,6 @@ private:
     std::set<int> stickyKeys_;         // toggled modifiers (SS/US)
     int selectedScancode_ = 0;         // last clicked (for visual feedback)
     float selectionTimer_ = 0.0f;
-    float ruslatHoldTimer_ = 0.0f;     // hold F6 for several frames so ROM detects it
     bool resetPerformed_ = false;      // ВВОД/СБР clicked → GUI refresh pending
 
     // ВВОД/СБР: system keys — they reset the machine only while БЛК is latched

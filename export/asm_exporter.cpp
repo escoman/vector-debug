@@ -937,11 +937,37 @@ std::string AsmExporter::emitExportJson(const AsmExportReport &report)
 }
 
 // ---------------------------------------------------------------------------
+// unassignedOpcodeRow — keep i8080 unassigned opcodes as raw bytes
+// ---------------------------------------------------------------------------
+
+std::string AsmExporter::unassignedOpcodeRow(const AnalyzedInstruction &instr)
+{
+    // Only the NOP family is affected: a genuine NOP is 00h, and the decoder
+    // gives every other unassigned opcode the same 1-byte NOP form.  Anything
+    // with operands or a branch target carries data the mnemonic already
+    // reproduces, so it must go through the normal path.
+    if (instr.mnemonic != "NOP" || instr.opcode == 0x00 || instr.size != 1) {
+        return std::string();
+    }
+
+    std::ostringstream os;
+    os << "\t; unassigned i8080 opcode, executes as NOP -- emitted as byte\n";
+    os << "\tdefb\t" << formatByte(instr.opcode) << "\n";
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
 // emitInstruction — convert one analyzed instruction to z80asm text
 // ---------------------------------------------------------------------------
 
 std::string AsmExporter::emitInstruction(const AnalyzedInstruction &instr)
 {
+    // The mnemonic of an unassigned opcode does not reproduce its byte: `nop`
+    // assembles to 00h while the ROM holds e.g. 28h.  A silent one-byte shift
+    // breaks the byte-for-byte round-trip contract, so preserve the raw byte.
+    std::string raw = unassignedOpcodeRow(instr);
+    if (!raw.empty()) return raw;
+
     std::ostringstream os;
     os << "\t" << toLower(instr.mnemonic);
 

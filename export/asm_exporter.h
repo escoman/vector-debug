@@ -142,6 +142,16 @@ public:
     // digit, so bytes >= 0xA0 get a leading '0': 0x0A -> "0Ah", 0xFF -> "0FFh".
     static std::string formatByte(uint8_t b);
 
+    // Raw-byte substitution for i8080 unassigned opcodes.
+    // 08h/10h/18h/20h/28h/30h/38h decode as the 1-byte "NOP"
+    // (src/disassembler.cpp optable[], src/opcode_info.h length 1) but are not
+    // 00h, so printing the mnemonic would reassemble them as 00h and silently
+    // corrupt the image.  Such a byte is emitted as an explanatory comment plus
+    // a `defb` row instead -- the same treatment the disassembler already gives
+    // the truly undefined opcodes through its DB format.  Returns "" when the
+    // instruction is buildable from its mnemonic and must be printed normally.
+    static std::string unassignedOpcodeRow(const AnalyzedInstruction &instr);
+
 private:
     AsmExportConfig config_;
 

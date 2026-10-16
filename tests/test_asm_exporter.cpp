@@ -319,6 +319,119 @@ TEST_END()
 }
 
 // ---------------------------------------------------------------------------
+// Test: unassignedOpcodeRow — i8080 unassigned opcodes must not print `nop`
+// The decoder reports 08h/10h/18h/20h/28h/30h/38h as the 1-byte NOP, so the
+// mnemonic assembled back to 00h and silently corrupted the image (round-trip).
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(unassigned_opcode_row)
+{
+    auto makeInstr = [](uint8_t opcode, const char *mnemonic, uint8_t size) {
+        AnalyzedInstruction i;
+        i.address  = 0x0AA7;
+        i.opcode   = opcode;
+        i.size     = size;
+        i.mnemonic = mnemonic;
+        return i;
+    };
+
+    // The whole NOP family is preserved as its own byte.
+    const uint8_t unassigned[] = {0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38};
+    for (uint8_t op : unassigned) {
+        std::string row = AsmExporter::unassignedOpcodeRow(makeInstr(op, "NOP", 1));
+        std::string expected = "\tdefb\t" + AsmExporter::formatByte(op) + "\n";
+        CHECK(row.size() >= expected.size() &&
+              row.compare(row.size() - expected.size(), expected.size(), expected) == 0,
+              "unassigned opcode kept as its own byte, not as nop");
+        CHECK(row.find("nop\n") == std::string::npos,
+              "no nop mnemonic emitted for an unassigned opcode");
+        CHECK(!isBadHexLiteral(AsmExporter::formatByte(op)),
+              "preserved literal stays digit-led");
+    }
+
+    // The genuine NOP (00h) is assembled from its mnemonic as before.
+    CHECK(AsmExporter::unassignedOpcodeRow(makeInstr(0x00, "NOP", 1)).empty(),
+          "real 00h NOP unaffected");
+    // So is anything the mnemonic already reproduces.
+    CHECK(AsmExporter::unassignedOpcodeRow(makeInstr(0xC3, "JMP", 3)).empty(),
+          "JMP unaffected");
+    CHECK(AsmExporter::unassignedOpcodeRow(makeInstr(0x76, "HLT", 1)).empty(),
+          "HLT unaffected");
+    CHECK(AsmExporter::unassignedOpcodeRow(makeInstr(0xDB, "DB", 2)).empty(),
+          "DB (undefined opcode) unaffected");
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: export keeps unassigned opcodes byte-identical through the pipeline
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(export_unassigned_opcodes)
+{
+    //   0000: MVI A,0FFh      — reachable start of the stream
+    //   0002..0008: 08h 10h 18h 20h 28h 30h 38h — the unassigned NOP family
+    //   0009: 00h             — genuine NOP, must stay `nop`
+    //   000A: C9h             — RET, ends the walk
+    std::vector<uint8_t> rom(64, 0x00);
+    rom[0x00] = 0x3E; rom[0x01] = 0xFF;
+    const uint8_t unassigned[] = {0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38};
+    for (size_t i = 0; i < sizeof(unassigned); ++i) {
+        rom[0x02 + i] = unassigned[i];
+    }
+    rom[0x09] = 0x00;
+    rom[0x0A] = 0xC9;
+
+    std::string romPath = writeTempFile("unassigned.rom", rom.data(), rom.size());
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.outputDir = "/tmp/test_asm_export_unassigned";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "unassigned-opcode export succeeds");
+
+    std::string layout = readWholeFile("/tmp/test_asm_export_unassigned/layout.asm");
+    CHECK(!layout.empty(), "layout.asm readable");
+
+    auto countOccurrences = [](const std::string &hay, const std::string &needle) {
+        size_t n = 0, pos = 0;
+        while ((pos = hay.find(needle, pos)) != std::string::npos) { ++n; pos += needle.size(); }
+        return n;
+    };
+
+    // Each unassigned byte is present as its own defb row, and the original
+    // byte is what a build would emit — not 00h.
+    for (uint8_t op : unassigned) {
+        std::string row = "\tdefb\t" + AsmExporter::formatByte(op) + "\n";
+        CHECK(layout.find(row) != std::string::npos,
+              ("layout.asm preserves opcode " + AsmExporter::formatByte(op)).c_str());
+    }
+    CHECK(countOccurrences(layout, "; unassigned i8080 opcode") == 7,
+          "every substitution is explained by a comment");
+
+    // Exactly one `nop` survives in the stream: the 00h at 0x0009.  A second
+    // one would mean an unassigned opcode was printed as a mnemonic again.
+    CHECK(countOccurrences(layout, "\tnop\n") == 1, "only the genuine NOP prints as nop");
+
+    // Nothing unbuildable slipped in: no letter-led hex literal.
+    std::string tok;
+    bool foundBad = false;
+    auto feed = [&](char sep) {
+        if (!tok.empty()) { if (isBadHexLiteral(tok)) foundBad = true; tok.clear(); }
+    };
+    for (char c : layout) {
+        if (c==' '||c=='\t'||c==','||c==';'||c==':'||c=='\n'||c=='\r') feed(c);
+        else tok += c;
+    }
+    feed('\0');
+    CHECK(!foundBad, "no letter-led hex literal in layout.asm");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
 // Test: Full export with synthetic ROM
 // ---------------------------------------------------------------------------
 
@@ -1180,6 +1293,8 @@ int main()
     RUN_TEST(convert_operands_realistic);
     RUN_TEST(hex_literal_invariant);
     RUN_TEST(export_hex_literals_buildable);
+    RUN_TEST(unassigned_opcode_row);
+    RUN_TEST(export_unassigned_opcodes);
     RUN_TEST(full_export_synthetic);
     RUN_TEST(export_with_rdb);
     RUN_TEST(deterministic_export);

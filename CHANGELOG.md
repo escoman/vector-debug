@@ -10,6 +10,26 @@ The top-most `## [X.Y.Z]` section is used as the GitHub Release notes body
 Prepend new versions at the top; keep this first HTML comment free of `## [` lines.
 -->
 
+## [0.6.6] - 2026-10-16
+
+Byte-for-byte round-trip integrity for ROMs that contain unassigned i8080
+opcodes: `v06c-asm-export` now preserves the byte instead of its `NOP` mnemonic.
+
+### Fixed
+- The ASM export silently substituted a byte of the image for each of the seven
+  unassigned i8080 opcodes (`08h/10h/18h/20h/28h/30h/38h`). The disassembler
+  decodes them as the 1-byte `NOP` and the exporter printed the mnemonic, so
+  `28h` reassembled as `00h`. Nothing complained: `nop` is a valid instruction,
+  so `toolchain_lint` and `z80asm -m=8080_strict` stayed green and only a
+  byte-level diff (`roundtrip_verify`) could see the damage — on BASIC 2.997
+  (`basic.r0m`) three bytes at `0x0AA7`, `0x0AE9` and `0x1CB5` were corrupted.
+  Such a byte is now emitted as a commented `defb` row, the same way the truly
+  undefined opcodes (`CBh/D9h/DDh/EDh/FDh/FFh`) were already carried through
+  their `DB` format. A genuine `NOP` (`00h`) still prints as `nop`. Tagging the
+  address as an RDB `Data` object did not help and does not change this: inside
+  a code range the byte belongs to the instruction (Stage 6.23 §2.4).
+  See `docs/Known_Issue_ASM_Exporter_NOP_Opcodes.md`.
+
 ## [0.6.5] - 2026-10-12
 
 Reliable state control for AI-agent sessions: `debug_pause` now freezes, and

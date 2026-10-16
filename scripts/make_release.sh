@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build release binaries: v06c-debugger + v06c-mcp.
+# Build release binaries: v06c-debugger + v06c-mcp + v06c-asm-export.
 #
 # Run from anywhere: the script resolves the build/ directory relative to the
 # repo root (the parent of scripts/), so `..` still points at the top-level
@@ -16,7 +16,7 @@ cd "$BUILD_DIR"
 # generated Makefiles).
 cmake -DENABLE_AI_AGENT=ON ..
 make clean
-make v06c-debugger v06c-mcp -j"$(nproc)"
+make v06c-debugger v06c-mcp v06c-asm-export -j"$(nproc)"
 
 # Report the provenance baked into the freshly built binary (same stamp
 # debug_get_server_info returns). Ask the binary itself via its startup

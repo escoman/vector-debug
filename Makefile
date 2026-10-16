@@ -1,6 +1,6 @@
 # Build wrapper for the Vector-06C debugger.
 #
-#   make          -> full clean rebuild into build/ (v06c-debugger + v06c-mcp)
+#   make          -> full clean rebuild into build/ (v06c-debugger + v06c-mcp + v06c-asm-export)
 #   make release  -> build, then package a Linux release artifact into release/
 #
 # The real logic lives in scripts/make_release.sh (build) and
@@ -13,7 +13,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.
 .PHONY: all release help
 .DEFAULT_GOAL := all
 
-## all     : build v06c-debugger + v06c-mcp into build/ (full clean rebuild)
+## all     : build v06c-debugger + v06c-mcp + v06c-asm-export into build/ (full clean rebuild)
 all:
 	@bash scripts/make_release.sh
 

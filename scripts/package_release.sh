@@ -8,7 +8,8 @@
 #     out_dir  : where the archive goes (default: <repo>/release)
 #
 # Produces release/vector-debug-<version>-<platform>-<arch>/{binaries,workspaces/Default.ini,...}
-# and its archive (.tar.gz on linux, .zip on windows). The tuned workspace preset
+# and its archive (.tar.gz on linux, .zip on windows). All three built binaries
+# ship: v06c-debugger, v06c-mcp, v06c-asm-export. The tuned workspace preset
 # is always shipped so the debugger starts with the docking layout out of the box.
 # On linux a relocatable v06c-debugger.desktop launcher (+ icon) is bundled for
 # desktop integration. README.md is intentionally NOT shipped (build-oriented).
@@ -31,7 +32,8 @@ esac
 
 DEBUGGER="$BUILD_DIR/v06c-debugger$EXT"
 MCP="$BUILD_DIR/v06c-mcp$EXT"
-for b in "$DEBUGGER" "$MCP"; do
+EXPORTER="$BUILD_DIR/v06c-asm-export$EXT"
+for b in "$DEBUGGER" "$MCP" "$EXPORTER"; do
   [ -f "$b" ] || { echo "missing $b — build first (run 'make')" >&2; exit 1; }
 done
 
@@ -40,7 +42,7 @@ STAGE="$OUT_DIR/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/workspaces"
 
-cp "$DEBUGGER" "$MCP" "$STAGE/"
+cp "$DEBUGGER" "$MCP" "$EXPORTER" "$STAGE/"
 
 # Ship the tuned workspace preset (tracked at repo-root workspaces/).
 [ -f "$ROOT/workspaces/Default.ini" ] && cp "$ROOT/workspaces/Default.ini" "$STAGE/workspaces/" || true

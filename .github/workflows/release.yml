@@ -56,7 +56,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           cmake -S . -B build -DENABLE_AI_AGENT=ON
-          cmake --build build --target v06c-debugger v06c-mcp -j"$(nproc)"
+          cmake --build build --target v06c-debugger v06c-mcp v06c-asm-export -j"$(nproc)"
 
       # --- Windows toolchain (MSYS2 / MinGW-w64) — НЕ портировано, для наблюдения ---
       - name: Set up MSYS2 (MinGW-w64)
@@ -76,7 +76,7 @@ jobs:
         shell: msys2 {0}
         run: |
           cmake -S . -B build -G "MinGW Makefiles" -DENABLE_AI_AGENT=ON
-          cmake --build build --target v06c-debugger v06c-mcp -j"$(nproc)"
+          cmake --build build --target v06c-debugger v06c-mcp v06c-asm-export -j"$(nproc)"
 
       - name: Package
         shell: bash

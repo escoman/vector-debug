@@ -171,6 +171,12 @@ private:
     int  timerModes_[3] = {};        // mode per counter (0-5)
     uint8_t timerWriteLsb_[3] = {};  // temp LSB storage per counter
     bool timerDirty_[3] = {};        // true if counter was written since last snapshot
+    // Completed divider loads per counter since the last snapshot, counted on
+    // the emulation thread. Non-square-wave modes (0/1) are only audible when
+    // the ROM re-programmes the counter at audio rate (PWM melody — e.g.
+    // Arkanoid-style tunes on a mode-0 counter); this count is the evidence
+    // the Sound window uses to light such channels. Cleared per snapshot.
+    uint32_t timerLoadCount_[3] = {};
     // Persistent tone-output state per counter, mirroring the emulator's
     // CounterUnit::enabled for mode 3 (8253.h): set when a divider load
     // completes in square-wave mode, cleared when a mode-set control word

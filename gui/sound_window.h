@@ -15,7 +15,10 @@
 //     0. Standard Noise Channel — PIA1 Port C bit 0 (tape-out beeper).
 //        Bar shows switching ACTIVITY (toggle rate), not volume.
 //     i8253
-//     1-3. i8253 Channel 1..3 — bar shows output frequency
+//     1-3. i8253 Channel 1..3 — bar shows output frequency. A channel is
+//          active when it sustains a mode-3 square wave OR when a mode-0/1
+//          counter is re-programmed at audio rate (PWM melody, Arkanoid
+//          style) — the latter is highlighted as the special re-trigger mode.
 //     AY
 //     4.   AY Noise Channel — AY-3-8912 noise generator (activity/amplitude
 //          derived from AY registers R6/R7/R8-10 only)
@@ -51,6 +54,11 @@ public:
     {
         bool  active[NUM_CHANNELS] = {};
         float level[NUM_CHANNELS]  = {};  // 0..1 bar height
+        // i8253 channels producing their tone by audio-rate re-programming
+        // of a non-square-wave counter (mode-0/1 PWM melody, Arkanoid-style)
+        // instead of a self-sustaining mode-3 square wave. Render highlights
+        // these channels; always false for non-timer channels.
+        bool  retrigger[NUM_CHANNELS] = {};
     };
     static Analysis analyzeSnapshot(const SoundSnapshot &snap);
 

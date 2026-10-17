@@ -91,6 +91,21 @@ struct TimerChannelState
     // is persistent state, so the Sound window can draw a sustained note from
     // start to cancel, exactly like the AY tone channels.
     bool     sounding  = false;
+    // Number of COMPLETED counter-divider loads (an LSB+MSB pair, or a single
+    // LSB/MSB byte when the counter was programmed that way) since the
+    // previous snapshot — the per-interval re-programming RATE. This is what
+    // makes a non-square-wave channel audible: Vector ROMs drive melody
+    // through a mode-0 counter by reloading it continuously (PWM), producing
+    // an out-edge per write instead of a self-sustaining mode-3 square wave.
+    // A sustained mode-3 note keeps `sounding` true with this count at 0
+    // (the divider is loaded once); a mode-0 melody shows a large count with
+    // `sounding` false. Cleared on every snapshot (measurement, like dirty).
+    uint32_t loadsSinceLast = 0;
+    // Completed loads per second over the snapshot interval that produced
+    // loadsSinceLast (0 on the very first snapshot, before an interval
+    // exists). Wall-clock based, so the audibility threshold in the Sound
+    // window does not depend on the GUI frame rate.
+    double   loadRateHz = 0;
 };
 
 // Standard Vector noise channel — the 1-bit tape-out beeper

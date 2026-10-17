@@ -71,6 +71,14 @@ static constexpr float kGridAlpha    = 0.15f;
 // Timer clock of the i8253 in this machine (~1.5 MHz, pixel clock / 8)
 static constexpr float kTimerClockHz = 1500000.0f;
 
+// Minimum completed counter loads per second for a NON-square-wave i8253
+// counter (mode 0/1) to be considered an audible PWM melody: each reload
+// produces one output edge, so the reload rate IS the tone activity. Below
+// this rate the writes are timing/one-shot traffic, not sound (30 Hz is the
+// low end of a musical fundamental). Measured against wall time, so the
+// judgement is independent of the GUI frame rate.
+static constexpr double kPwmMinLoadsPerSec = 30.0;
+
 // AY amplitude lookup table (matches AY-3-8912 hardware)
 static const float kAmpTable[16] = {
     0.0f, 0.0137f, 0.0205f, 0.0291f,
@@ -123,22 +131,36 @@ SoundWindow::Analysis SoundWindow::analyzeSnapshot(const SoundSnapshot &snap)
         : 0.0f;
 
     // -----------------------------------------------------------------------
-    // 1-3. i8253 channels — activity from the counter's SUSTAINED tone-output
-    // state (`sounding`), not the one-shot write flag (`dirty`). A VI53 counter
-    // keeps generating its square wave from the moment a divider is loaded
-    // (mode 3) until it is reprogrammed, so the bar stays lit for the whole
-    // note — from start to cancel — exactly like the AY tone channels below.
+    // 1-3. i8253 channels — two ways a counter produces sound:
+    //  * mode 3 square wave: activity from the counter's SUSTAINED tone-output
+    //    state (`sounding`), not the one-shot write flag (`dirty`). A VI53
+    //    counter keeps generating its square wave from the moment a divider is
+    //    loaded (mode 3) until it is reprogrammed, so the bar stays lit for
+    //    the whole note — from start to cancel — exactly like the AY tone
+    //    channels below.
+    //  * mode 0/1 PWM melody: the counter never "sustains" — the ROM reloads
+    //    it continuously at audio rate (Arkanoid-style tunes do this), and
+    //    each completed load is one output edge. The channel is active while
+    //    the measured reload rate is audible, and is flagged `retrigger` so
+    //    the render can highlight this special output mode.
     // Bar height still comes from the output frequency (unchanged model).
     // -----------------------------------------------------------------------
     for (int ch = 0; ch < 3; ++ch) {
-        bool active = snap.timerChannels[ch].sounding;
-        a.active[CH_TIMER_BASE + ch] = active;
+        const TimerChannelState &t = snap.timerChannels[ch];
+        bool sustain = t.sounding;
+        bool retrigger = !sustain && (t.mode == 0 || t.mode == 1) &&
+                         t.loadValue != 0 &&
+                         t.loadsSinceLast > 0 &&
+                         t.loadRateHz >= kPwmMinLoadsPerSec;
+        bool active = sustain || retrigger;
+        int idx = CH_TIMER_BASE + ch;
+        a.active[idx] = active;
+        a.retrigger[idx] = retrigger;
         if (active) {
-            uint16_t load = snap.timerChannels[ch].loadValue;
-            float freq = load > 0 ? kTimerClockHz / load : 0.0f;
-            a.level[CH_TIMER_BASE + ch] = activityLevelFromHz(freq);
+            float freq = t.loadValue > 0 ? kTimerClockHz / t.loadValue : 0.0f;
+            a.level[idx] = activityLevelFromHz(freq);
         } else {
-            a.level[CH_TIMER_BASE + ch] = 0.0f;
+            a.level[idx] = 0.0f;
         }
     }
 
@@ -183,12 +205,16 @@ SoundWindow::Analysis SoundWindow::analyzeSnapshot(const SoundSnapshot &snap)
 
 static void drawSoundLog(const char *name, int channelIdx,
                          const float *ringBuffer, int writePos, int count,
-                         bool active, float chartHeight)
+                         bool active, float chartHeight,
+                         bool retrigger = false)
 {
     ImGui::PushID(channelIdx);
 
-    // Label (dimmed when inactive)
-    ImVec4 textColor = active ? ImVec4(1, 1, 1, 1) : ImVec4(0.5f, 0.5f, 0.5f, 1);
+    // Label (dimmed when inactive; amber when the tone is a PWM re-trigger
+    // melody — the special non-square-wave output mode)
+    ImVec4 textColor = retrigger ? ImVec4(1.0f, 0.78f, 0.2f, 1.0f)
+                     : active    ? ImVec4(1, 1, 1, 1)
+                                 : ImVec4(0.5f, 0.5f, 0.5f, 1);
     ImGui::PushStyleColor(ImGuiCol_Text, textColor);
     ImGui::Text("%s", name);
     ImGui::PopStyleColor();
@@ -239,11 +265,17 @@ static void drawSoundLog(const char *name, int channelIdx,
         }
     }
 
-    // Border
+    // Border — PWM re-trigger channels get a thick amber frame so the
+    // special melody mode is obvious even in a screenshot of the log.
     ImU32 borderColor = ImGui::GetColorU32(ImVec4(0.4f, 0.4f, 0.4f, 0.6f));
+    float borderThickness = 1.0f;
+    if (retrigger) {
+        borderColor = ImGui::GetColorU32(ImVec4(1.0f, 0.78f, 0.2f, 1.0f));
+        borderThickness = 2.0f;
+    }
     drawList->AddRect(cursorPos,
                       ImVec2(cursorPos.x + canvasSize.x, cursorPos.y + canvasSize.y),
-                      borderColor);
+                      borderColor, 0.0f, 0, borderThickness);
 
     // Invisible dummy to reserve space in the ImGui layout
     ImGui::Dummy(canvasSize);
@@ -407,13 +439,20 @@ void SoundWindow::render(IDebugBackend &backend)
                  a.active[CH_STD_NOISE], kChartHeight);
     ImGui::Spacing();
 
-    // i8253 — three tone channels
+    // i8253 — three tone channels (PWM re-trigger melodies are tagged and
+    // highlighted — see analyzeSnapshot)
     sectionHeader(channelSection(CH_TIMER_BASE));
     for (int ch = 0; ch < 3; ++ch) {
         int idx = CH_TIMER_BASE + ch;
-        drawSoundLog(channelName(idx), idx,
+        char label[64];
+        if (a.retrigger[idx]) {
+            snprintf(label, sizeof(label), "%s  [PWM re-trigger]", channelName(idx));
+        } else {
+            snprintf(label, sizeof(label), "%s", channelName(idx));
+        }
+        drawSoundLog(label, idx,
                      soundLog_[idx], soundLogWrite_, soundLogCount_,
-                     a.active[idx], kChartHeight);
+                     a.active[idx], kChartHeight, a.retrigger[idx]);
     }
     ImGui::Spacing();
 
@@ -450,11 +489,27 @@ void SoundWindow::render(IDebugBackend &backend)
 
     // i8253 channels (counter index 0..2 == Channel 1..3)
     for (int ch = 0; ch < 3; ++ch) {
-        int timerPeriod = snap.timerChannels[ch].loadValue;
-        if (a.active[CH_TIMER_BASE + ch] && timerPeriod > 0) {
+        const TimerChannelState &t = snap.timerChannels[ch];
+        int timerPeriod = t.loadValue;
+        int idx = CH_TIMER_BASE + ch;
+        if (a.retrigger[idx]) {
+            // Special output mode: one-shot counter hammered at audio rate
+            float freq = timerPeriod > 0 ? kTimerClockHz / timerPeriod : 0.0f;
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.2f, 1.0f),
+                               "i8253 Channel %d: mode %d — PWM melody (%.0f re-loads/sec)"
+                               "  load=%d  divider freq≈%.0f Hz",
+                               ch + 1, t.mode, t.loadRateHz,
+                               timerPeriod, freq);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Tone comes from the reload rate, not a self-running\n"
+                    "square wave. GRAB AUDIO records these writes too, but\n"
+                    "the offline MIDI parser decodes mode-3 notes only.");
+            }
+        } else if (a.active[idx] && timerPeriod > 0) {
             float freq = kTimerClockHz / timerPeriod;
-            ImGui::Text("i8253 Channel %d: load=%d  mode=%d  freq=%.0f Hz",
-                        ch + 1, timerPeriod, snap.timerChannels[ch].mode, freq);
+            ImGui::Text("i8253 Channel %d: load=%d  mode=%d  freq=%.0f Hz  [square wave, sustained]",
+                        ch + 1, timerPeriod, t.mode, freq);
         } else {
             ImGui::Text("i8253 Channel %d: idle", ch + 1);
         }

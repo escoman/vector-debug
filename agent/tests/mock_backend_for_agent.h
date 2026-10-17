@@ -341,7 +341,7 @@ public:
 
     // -- Sound --------------------------------------------------------------
 
-    SoundSnapshot soundSnapshot() const override { return {}; }
+    SoundSnapshot soundSnapshot() const override { return SoundSnapshot{}; }
     void setMuted(bool) override {}
 
     // -- Activity -----------------------------------------------------------

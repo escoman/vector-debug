@@ -107,7 +107,10 @@ public:
 
     // -- Sound --------------------------------------------------------------
 
-    virtual SoundSnapshot soundSnapshot() const { return {}; }
+    // Explicit type (not brace elision `{}`): SoundSnapshot aggregates an
+    // array of TimerChannelState which carries double members — GCC's
+    // empty-brace elision mis-compiles that nested-aggregate shape.
+    virtual SoundSnapshot soundSnapshot() const { return SoundSnapshot{}; }
     virtual void setMuted(bool muted) { (void)muted; }
 
     // Audio output gate: true only while the emulation loop is executing

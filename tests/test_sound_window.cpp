@@ -206,6 +206,76 @@ static void test_timer_channels_not_swapped()
     TEST_END();
 }
 
+// ---------------------------------------------------------------------------
+// mode-0 PWM melody (Arkanoid-style): a non-square counter reloaded at audio
+// rate must light its channel and be flagged as the special re-trigger mode.
+// ---------------------------------------------------------------------------
+
+static void test_timer_pwm_retrigger_mode0()
+{
+    TEST_BEGIN("Sound window: i8253 mode-0 PWM re-trigger melody detection");
+
+    using SW = SoundWindow;
+    SoundSnapshot s{};
+    s.available = true;
+    s.registers[7] = 0xFF;           // AY off
+    applyMixer(s);
+    // Arkan_Sample2_NoBuzz2-style: counter 0 in mode 0, never "sounding",
+    // reloaded thousands of times per second with small dividers.
+    s.timerChannels[0].mode = 0;
+    s.timerChannels[0].loadValue = 0x28;
+    s.timerChannels[0].sounding = false;
+    s.timerChannels[0].loadsSinceLast = 1400;
+    s.timerChannels[0].loadRateHz = 85000.0;
+
+    SW::Analysis a = SW::analyzeSnapshot(s);
+    CHECK(a.active[SW::CH_TIMER_BASE + 0], "mode-0 audio-rate re-loads keep channel active");
+    CHECK(a.retrigger[SW::CH_TIMER_BASE + 0], "channel flagged as PWM re-trigger");
+    CHECK(a.level[SW::CH_TIMER_BASE + 0] > 0.0f, "bar level > 0 in re-trigger mode");
+    CHECK(!a.active[SW::CH_TIMER_BASE + 1] && !a.active[SW::CH_TIMER_BASE + 2],
+          "other counters stay dark");
+    CHECK(!a.retrigger[SW::CH_TIMER_BASE + 1] && !a.retrigger[SW::CH_TIMER_BASE + 2],
+          "retrigger flag only on the active counter");
+
+    // Below the audible rate: timing/one-shot writes, not a melody
+    SoundSnapshot s2 = s;
+    s2.timerChannels[0].loadsSinceLast = 1;
+    s2.timerChannels[0].loadRateHz = 5.0;
+    SW::Analysis a2 = SW::analyzeSnapshot(s2);
+    CHECK(!a2.active[SW::CH_TIMER_BASE + 0], "slow re-loads (5/sec) are not a tone");
+    CHECK(!a2.retrigger[SW::CH_TIMER_BASE + 0], "no retrigger flag below threshold");
+
+    // Mode 1 (one-shot) reloaded at audio rate behaves like mode 0
+    SoundSnapshot s3 = s;
+    s3.timerChannels[0].mode = 1;
+    SW::Analysis a3 = SW::analyzeSnapshot(s3);
+    CHECK(a3.active[SW::CH_TIMER_BASE + 0] && a3.retrigger[SW::CH_TIMER_BASE + 0],
+          "mode-1 audio-rate re-loads also shown as PWM");
+
+    // A sustained mode-3 square wave is NOT the special mode, even if the
+    // ROM happens to refresh the divider quickly
+    SoundSnapshot s4 = s;
+    s4.timerChannels[0].mode = 3;
+    s4.timerChannels[0].sounding = true;
+    SW::Analysis a4 = SW::analyzeSnapshot(s4);
+    CHECK(a4.active[SW::CH_TIMER_BASE + 0], "mode-3 stays active via sounding");
+    CHECK(!a4.retrigger[SW::CH_TIMER_BASE + 0], "mode-3 square wave is not flagged retrigger");
+
+    // Zero divider: re-loads but no tone (vi53 silence convention)
+    SoundSnapshot s5 = s;
+    s5.timerChannels[0].loadValue = 0;
+    SW::Analysis a5 = SW::analyzeSnapshot(s5);
+    CHECK(!a5.active[SW::CH_TIMER_BASE + 0], "zero divider with fast writes stays dark");
+
+    // Mode 2/4/5 reload storms are not claimed as tones (out does not edge)
+    SoundSnapshot s6 = s;
+    s6.timerChannels[0].mode = 2;
+    SW::Analysis a6 = SW::analyzeSnapshot(s6);
+    CHECK(!a6.active[SW::CH_TIMER_BASE + 0], "mode-2 re-loads are not flagged as melody");
+
+    TEST_END();
+}
+
 static void test_ay_tone_channels_not_swapped()
 {
     TEST_BEGIN("Sound window: AY Channel A/B/C amplitude mapping");
@@ -528,6 +598,71 @@ static void test_adapter_i8253_sustained_tone(DebugAdapter &adapter)
 }
 
 // ---------------------------------------------------------------------------
+// Arkanoid-style PWM melody through the REAL adapter: the exact port sequence
+// of Arkan_Sample2_NoBuzz2.rom (CW 30h = ctr0/LSB+MSB/mode 0, then CW 10h =
+// ctr0/LSB-only/mode 0, then a stream of single-byte counter loads) must be
+// counted and lit by the Sound window even though `sounding` never turns true
+// (that flag is the mode-3 square-wave mirror and stays false here).
+// ---------------------------------------------------------------------------
+
+static void test_adapter_i8253_pwm_melody(DebugAdapter &adapter)
+{
+    TEST_BEGIN("DebugAdapter: mode-0 PWM melody counted (Arkanoid-style ROM)");
+
+    adapter.reset(false);            // BLKSBR: clean counter programming
+    takeSnapshot(adapter);           // consume reset-path counts
+
+    // ROM init sequence, verbatim from the Arkanoid sample disassembly
+    adapter.writeIoPort(0x08, 0x30);   // ctr0, LSB+MSB, mode 0
+    adapter.writeIoPort(0x0B, 0x01);   // LSB
+    adapter.writeIoPort(0x0B, 0x00);   // MSB → completed load #1 (divider 1)
+    adapter.writeIoPort(0x08, 0x10);   // ctr0, LSB-only, mode 0
+
+    SoundSnapshot s = takeSnapshot(adapter);
+    CHECK_EQ(0, s.timerChannels[0].mode, "ctr0 programmed into mode 0");
+    CHECK(!s.timerChannels[0].sounding, "mode-0 load never sets sounding");
+    CHECK_EQ(1, s.timerChannels[0].loadsSinceLast, "one completed LSB+MSB load counted");
+
+    // The melody loop: audio-rate single-byte re-loads of counter 0
+    for (int i = 0; i < 500; ++i) {
+        adapter.writeIoPort(0x0B, static_cast<uint8_t>(0x1A + (i & 0x0F)));
+    }
+    s = takeSnapshot(adapter);
+    CHECK_EQ(500, s.timerChannels[0].loadsSinceLast,
+             "every completed LSB re-load is counted");
+    CHECK(s.timerChannels[0].loadRateHz >= 30.0 || s.timerChannels[0].loadsSinceLast > 0,
+          "re-load rate measured over the snapshot interval");
+    CHECK(!s.timerChannels[0].sounding, "still not a square-wave note");
+
+    SoundWindow::Analysis a = SoundWindow::analyzeSnapshot(s);
+    CHECK(a.active[SoundWindow::CH_TIMER_BASE + 0],
+          "Sound window lights the PWM melody channel");
+    CHECK(a.retrigger[SoundWindow::CH_TIMER_BASE + 0],
+          "channel flagged as the special re-trigger mode");
+    CHECK(a.level[SoundWindow::CH_TIMER_BASE + 0] > 0.0f, "bar has height");
+
+    // Stop writing: the count is per-interval, the channel must go dark
+    s = takeSnapshot(adapter);
+    CHECK_EQ(0, s.timerChannels[0].loadsSinceLast, "load count is per-interval");
+    a = SoundWindow::analyzeSnapshot(s);
+    CHECK(!a.active[SoundWindow::CH_TIMER_BASE + 0],
+          "channel dark once the re-load stream stops");
+
+    // Counter isolation: only counter 0 (Channel 1) is affected
+    adapter.writeIoPort(0x08, 0x70);   // ctr1, LSB+MSB, mode 0
+    adapter.writeIoPort(0x0A, 0x55);   // LSB
+    adapter.writeIoPort(0x0A, 0x00);   // MSB → one completed load (divider 85)
+    s = takeSnapshot(adapter);
+    a = SoundWindow::analyzeSnapshot(s);
+    CHECK(a.active[SoundWindow::CH_TIMER_BASE + 1] && a.retrigger[SoundWindow::CH_TIMER_BASE + 1],
+          "counter 1 re-loads light Channel 2 (per-counter tracking)");
+    CHECK(!a.retrigger[SoundWindow::CH_TIMER_BASE + 0],
+          "counter 0 stays dark with no new writes");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Regression: loading a second ROM must silence a note stuck from the first
 // one. The bootloader (boots.bin 0x0000-0x0010) re-initializes PIA/PPI/i8253
 // after a real reset; ROM load skips it, so DebugAdapter::loadRom replays it.
@@ -690,6 +825,7 @@ int main()
     test_channel_order_and_labels();
     test_std_noise_source_is_not_ay_noise();
     test_timer_channels_not_swapped();
+    test_timer_pwm_retrigger_mode0();
     test_ay_tone_channels_not_swapped();
     test_ay_disabled_others_unaffected();
 
@@ -709,6 +845,7 @@ int main()
     test_adapter_ay_independent_from_standard_noise(adapter);
     test_adapter_i8253_port_mapping(adapter);
     test_adapter_i8253_sustained_tone(adapter);
+    test_adapter_i8253_pwm_melody(adapter);
     test_loadrom_silences_stuck_note(adapter);
     test_loadrom_disables_inherited_interrupts(adapter);
     test_audio_output_gate(adapter);

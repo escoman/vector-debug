@@ -310,6 +310,10 @@ void DebugAdapter::init()
             // "silence" mode the ROMs use) and a zero divider leave the output
             // static. The 8253 folds mode bits 111→3, hence the &3.
             if (loadComplete) {
+                // Count every completed divider load per interval. Mode 3
+                // sustains on `sounding` alone; the count is what lets the
+                // Sound window detect audio-rate re-programming (mode-0 PWM).
+                timerLoadCount_[ctr]++;
                 bool toneMode = (timerModes_[ctr] & 3) == 3;
                 timerSounding_[ctr] = toneMode && timerLoadValues_[ctr] != 0;
             }
@@ -693,13 +697,27 @@ SoundSnapshot DebugAdapter::soundSnapshot() const
     // `sounding` is persistent tone-output state and is deliberately NOT
     // cleared here: it stays true from the moment a note is loaded until the
     // counter is reprogrammed, so the Sound window draws a sustained note like
-    // the AY tone channels. `dirty` remains a per-snapshot write event.
+    // the AY tone channels. `dirty` and `loadsSinceLast` remain per-snapshot
+    // measurements; the load rate over the snapshot interval is computed with
+    // the same wall clock as the PC0 toggle rate below.
+    const auto now = std::chrono::steady_clock::now();
+    double intervalSec = 0.0;
+    if (pc0SnapshotPrimed_ && now > pc0SnapshotTime_) {
+        intervalSec = std::chrono::duration<double>(now - pc0SnapshotTime_).count();
+    }
     for (int i = 0; i < 3; ++i) {
         snap.timerChannels[i].loadValue = timerLoadValues_[i];
         snap.timerChannels[i].mode      = timerModes_[i];
         snap.timerChannels[i].dirty     = timerDirty_[i];
         snap.timerChannels[i].sounding  = timerSounding_[i];
-        const_cast<DebugAdapter*>(this)->timerDirty_[i] = false;
+        snap.timerChannels[i].loadsSinceLast = timerLoadCount_[i];
+        snap.timerChannels[i].loadRateHz =
+            intervalSec > 0.0
+                ? static_cast<double>(timerLoadCount_[i]) / intervalSec
+                : 0.0;
+        DebugAdapter *self = const_cast<DebugAdapter*>(this);
+        self->timerDirty_[i] = false;
+        self->timerLoadCount_[i] = 0;
     }
 
     // Standard Vector noise (PIA PC0): transitions since the PREVIOUS
@@ -707,16 +725,12 @@ SoundSnapshot DebugAdapter::soundSnapshot() const
     // The atomic counter is written by the emulation thread; the delta and
     // the interval bookkeeping below are only touched from this (snapshot)
     // thread, so there is no read/write race.
-    const auto now = std::chrono::steady_clock::now();
     uint64_t total = pc0TogglesTotal_.load(std::memory_order_relaxed);
     snap.standardNoise.togglesSinceLast =
         static_cast<uint32_t>(total - pc0TogglesLastSnapshot_);
-    if (pc0SnapshotPrimed_ && now > pc0SnapshotTime_) {
-        double dt = std::chrono::duration<double>(now - pc0SnapshotTime_).count();
-        if (dt > 0.0) {
-            snap.standardNoise.toggleRateHz =
-                static_cast<double>(snap.standardNoise.togglesSinceLast) / dt;
-        }
+    if (intervalSec > 0.0) {
+        snap.standardNoise.toggleRateHz =
+            static_cast<double>(snap.standardNoise.togglesSinceLast) / intervalSec;
     }
     snap.standardNoise.dirty = snap.standardNoise.togglesSinceLast > 0;
     snap.standardNoise.lastLevel = pc0Mirror_;

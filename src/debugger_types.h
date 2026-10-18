@@ -182,6 +182,12 @@ struct BeamState
     int  visibleX = -1;            // -1 when not visible
     int  visibleY = -1;
 
+    // Full-framebuffer coordinates (0..screen_width-1, 0..screen_height-1),
+    // valid even while the beam sweeps the horizontal/vertical border. -1 when
+    // the beam is physically outside the displayed buffer (vsync / retrace).
+    int  fbX = -1;
+    int  fbY = -1;
+
     uint32_t frameVCycles = 0;     // timing params read from the video model
     uint32_t lineVCycles  = 0;
     uint32_t frameLines   = 0;

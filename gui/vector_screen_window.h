@@ -73,6 +73,12 @@ private:
     std::vector<uint32_t> capturedPixels_;
     int capturedWidth_ = 0, capturedHeight_ = 0;
 
+    // -- Beam overlay (racing-the-beam) --------------------------------------
+    // When enabled and the emulation is paused, draw a blinking marker at the
+    // beam's current raster position and report its coordinates in the status
+    // bar. The marker is sized in framebuffer pixels so it scales with zoom.
+    bool showBeam_ = false;
+
     // -- Texture -------------------------------------------------------------
     unsigned int textureId_ = 0;
     int texWidth_  = 0;

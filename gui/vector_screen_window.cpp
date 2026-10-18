@@ -170,6 +170,10 @@ void VectorScreenWindow::renderToolbar(IDebugBackend &backend)
             liveMode_ = true;
         }
     }
+
+    // Beam overlay: show current beam position while paused
+    ImGui::SameLine();
+    ImGui::Checkbox("Beam", &showBeam_);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +203,30 @@ void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
         const char *modeStr = video.mode512 ? "512" : "256";
         ImGui::Text("Screen: %s %dx%d  (hover for coordinates)",
                     modeStr, contentW, contentH);
+    }
+
+    // Beam position readout (only meaningful while paused)
+    if (showBeam_) {
+        if (!backend.isPaused()) {
+            ImGui::Text("Beam: (pause emulation to view)");
+        } else {
+            BeamState beam = backend.beamState();
+            if (!beam.available) {
+                ImGui::Text("Beam: (unavailable)");
+            } else if (beam.visible) {
+                // Same content-coordinate convention as the Screen readout.
+                int contentX = video.mode512 ? beam.visibleX : (beam.visibleX / 2);
+                ImGui::Text("Beam: X: %d  Y: %d  (line %u)",
+                            contentX, beam.visibleY, beam.rasterLine);
+            } else if (beam.fbX >= 0 && beam.fbY >= 0) {
+                // Beam is over the border area but still on the displayed frame.
+                ImGui::Text("Beam: (border) FB X: %d  Y: %d  (line %u)",
+                            beam.fbX, beam.fbY, beam.rasterLine);
+            } else {
+                // Beam is off-display during vsync retrace.
+                ImGui::Text("Beam: (off-display, line %u)", beam.rasterLine);
+            }
+        }
     }
 }
 
@@ -355,10 +383,42 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
                         true);
 
     // Render the image
-    ImGui::GetWindowDrawList()->AddImage(
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+    drawList->AddImage(
         static_cast<ImTextureID>(static_cast<uint64_t>(textureId_)),
         imgPos, imgEnd,
         ImVec2(u0, v0), ImVec2(u1, v1));
+
+    // Beam overlay: a blinking marker at the current raster position, shown
+    // only while paused. Sized in framebuffer pixels so it scales with zoom.
+    if (showBeam_ && backend.isPaused()) {
+        BeamState beam = backend.beamState();
+        // fbX/fbY are full-framebuffer coordinates and remain valid while the
+        // beam sweeps the border, so the marker shows for line 299 (bottom
+        // border) too. -1 means the beam is off-display (vsync retrace).
+        if (beam.available && beam.fbX >= 0 && beam.fbY >= 0 &&
+            beam.fbX < fullW && beam.fbY < fullH) {
+            // Framebuffer coords -> screen pixels (same transform as hover).
+            const float sx  = imageSize.x / static_cast<float>(fullW);
+            const float sy  = imageSize.y / static_cast<float>(fullH);
+            ImVec2 center(imgPos.x + (beam.fbX + 0.5f) * sx,
+                          imgPos.y + (beam.fbY + 0.5f) * sy);
+
+            // Marker footprint ~3x3 framebuffer pixels (visible even at 1x).
+            const float halfW = 1.5f * sx;
+            const float halfH = 1.5f * sy;
+            ImVec2 a(center.x - halfW, center.y - halfH);
+            ImVec2 b(center.x + halfW, center.y + halfH);
+
+            // Blink at ~2 Hz: bright filled square on, hollow outline off.
+            const bool blinkOn =
+                (static_cast<int>(ImGui::GetTime() * 2.0) % 2) == 0;
+            if (blinkOn) {
+                drawList->AddRectFilled(a, b, IM_COL32(255, 60, 60, 255));
+            }
+            drawList->AddRect(a, b, IM_COL32(255, 255, 255, 255));
+        }
+    }
 
     ImGui::PopClipRect();
 

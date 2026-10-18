@@ -582,6 +582,18 @@ BeamState DebugAdapter::getBeamState()
         s.visibleY = -1;
     }
 
+    // Full-framebuffer position, valid even during border sweep so the GUI can
+    // still show where the beam is. bmpX/bmpY are already buffer coordinates
+    // (scrWidth is the full 576-wide TV buffer and firstVisibleLine =
+    // frameLines - screen_height). Clamp to the buffer; the beam is off-display
+    // (-1) only during vsync retrace above/below the frame.
+    {
+        const int bufW = filler.scrWidth();
+        const int bufH = static_cast<int>(s.frameLines) - filler.firstVisibleLine();
+        s.fbX = (bmpX >= 0 && bmpX < bufW) ? bmpX : -1;
+        s.fbY = (bmpY >= 0 && bmpY < bufH) ? bmpY : -1;
+    }
+
     // CPU currently executing "next to" the beam.
     CpuState cpu = getCpuState();
     s.cpuPc      = cpu.pc;

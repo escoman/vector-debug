@@ -406,6 +406,24 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
             ImVec2 center(imgPos.x + (beam.fbX + 0.5f) * sx,
                           imgPos.y + (beam.fbY + 0.5f) * sy);
 
+            // Red trail behind the beam: 32 framebuffer pixels to the left,
+            // one zoomed pixel thick (exactly the beam's raster row). Alpha
+            // ramps linearly from dim at the tail to near-opaque next to the
+            // beam, then the blinking marker is drawn on top.
+            const int trailLen = 32;
+            const float y0 = imgPos.y + beam.fbY * sy;
+            for (int i = 0; i < trailLen; ++i) {
+                int x = beam.fbX - trailLen + i;   // fbX-32 .. fbX-1
+                if (x < 0) continue;
+                // i == trailLen-1 is the segment adjacent to the beam.
+                float t = (i + 1) / static_cast<float>(trailLen);
+                int alpha = static_cast<int>(16.0f + 224.0f * t);
+                drawList->AddRectFilled(
+                    ImVec2(imgPos.x + x * sx, y0),
+                    ImVec2(imgPos.x + (x + 1) * sx, y0 + sy),
+                    IM_COL32(255, 60, 60, alpha));
+            }
+
             // Marker footprint ~3x3 framebuffer pixels (visible even at 1x).
             const float halfW = 1.5f * sx;
             const float halfH = 1.5f * sy;

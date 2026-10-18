@@ -341,11 +341,11 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
                 // Breakpoint toggle
                 if (backend.hasBreakpoint(selectedAddress_)) {
                     if (ImGui::MenuItem("Remove Breakpoint")) {
-                        backend.removeBreakpoint(selectedAddress_);
+                        backend.requestRemoveBreakpoint(selectedAddress_);
                     }
                 } else {
                     if (ImGui::MenuItem("Set Breakpoint")) {
-                        backend.addBreakpoint(selectedAddress_);
+                        backend.requestAddBreakpoint(selectedAddress_);
                     }
                 }
                 ImGui::Separator();

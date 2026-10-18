@@ -314,7 +314,7 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Set Breakpoint")) {
-                    backend.addBreakpoint(obj->address);
+                    backend.requestAddBreakpoint(obj->address);
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Remove Object")) {

@@ -173,12 +173,12 @@ void FunctionsWindow::render(IDebugBackend &backend)
 
             if (hasBpCtx) {
                 if (ImGui::MenuItem("Remove Breakpoint")) {
-                    backend.removeBreakpoint(contextAddress_);
+                    backend.requestRemoveBreakpoint(contextAddress_);
                     needsRefresh_ = true;
                 }
             } else {
                 if (ImGui::MenuItem("Set Breakpoint")) {
-                    backend.addBreakpoint(contextAddress_);
+                    backend.requestAddBreakpoint(contextAddress_);
                     needsRefresh_ = true;
                 }
             }

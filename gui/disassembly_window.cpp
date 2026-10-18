@@ -336,11 +336,14 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
         if (ImGui::BeginPopupContextItem("dasmctx")) {
             if (hasBp) {
                 if (ImGui::MenuItem("Remove Breakpoint")) {
-                    backend.removeBreakpoint(lineAddr);
+                    // Route through the command queue so the mutation runs on
+                    // the emulation thread and syncs to the Board immediately —
+                    // direct addBreakpoint() would not fire during Running.
+                    backend.requestRemoveBreakpoint(lineAddr);
                 }
             } else {
                 if (ImGui::MenuItem("Set Breakpoint")) {
-                    backend.addBreakpoint(lineAddr);
+                    backend.requestAddBreakpoint(lineAddr);
                 }
             }
             ImGui::Separator();

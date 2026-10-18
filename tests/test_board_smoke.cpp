@@ -1109,6 +1109,128 @@ static void test_breakpoint_sync_removal()
 }
 
 // ---------------------------------------------------------------------------
+// Regression test: resuming after a mid-frame breakpoint must CONTINUE the
+// interrupted frame, not restart it.
+//
+// Bug (BUG-vmcp-beam-reset-on-resume): Board::execute_frame() unconditionally
+// ran ++frame_no + filler.reset() on every call, so a breakpoint hit in the
+// middle of a video frame threw the frame away on resume: raster_line jumped
+// back to 0 and frame_no grew, desynchronizing CPU position from the beam.
+// ---------------------------------------------------------------------------
+
+static void test_beam_continues_after_midframe_resume()
+{
+    TEST_BEGIN("Beam continues interrupted frame after breakpoint resume");
+
+    Options.novideo = true;
+    Options.nosound = true;
+
+    Memory memory;
+    FD1793 fdc;
+    Wav wav;
+    WavPlayer tape_player(wav);
+    Keyboard keyboard;
+    I8253 timer;
+    TimerWrapper tw(timer);
+    AY ay;
+    AYWrapper aw(ay);
+    Soundnik soundnik(tw, aw);
+    IO io(memory, keyboard, timer, fdc, ay, tape_player);
+    TV tv;
+    PixelFiller filler(memory, io, tv);
+    filler.init();
+    soundnik.init(nullptr);
+    tv.init();
+    Board board(memory, io, filler, soundnik, tv, tape_player);
+    board.init();
+
+    // Nested countdown with DCR (this core's DCX does not touch flags, so
+    // the loop exit must come from DCR's Z):
+    // 0000: 06 10        MVI B, 16h
+    // 0002: 0E FF        MVI C, 0FFh
+    // 0004: 0D           DCR C
+    // 0005: C2 04 00     JNZ 0004      ; inner pass ~255 iters (~19 raster lines)
+    // 0008: 05           DCR B         ; <-- breakpoint here: hit once per inner pass
+    // 0009: C2 02 00     JNZ 0002
+    // 000C: C3 0C 00     JMP 000C      ; spin when all passes are done
+    static const uint8_t beam_prog[] = {
+        0x06, 0x10, 0x0E, 0xFF, 0x0D, 0xC2, 0x04, 0x00,
+        0x05, 0xC2, 0x02, 0x00, 0xC3, 0x0C, 0x00,
+    };
+    for (size_t i = 0; i < sizeof(beam_prog); ++i)
+        memory.write((uint16_t)i, beam_prog[i], false);
+
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+
+    board.debugger_attached();
+    board.debugger_continue();
+    board.insert_breakpoint(0, 0x0008, 1);
+
+    // Run frames until the breakpoint stops execution inside a frame.
+    // (CPU never executes EI, so no INT is taken — the beam position at the
+    // stop is deterministic and ~19 lines below the top of the frame.)
+    for (int i = 0; i < 30 && i8080_pc() != 0x0008; ++i) {
+        board.debugger_continue();
+        board.execute_frame_with_cadence(true, false);
+    }
+    CHECK_EQ(0x0008, i8080_pc(), "stopped at breakpoint 0x0008");
+    CHECK(!filler.brk, "breakpoint hit mid-frame (frame not completed)");
+
+    int frameAtStop = board.get_frame_no();
+    int lineAtStop  = filler.rasterLine();
+    printf("  stopped: frame=%d raster_line=%d\n", frameAtStop, lineAtStop);
+    CHECK(lineAtStop > 0 && lineAtStop < 312,
+          "first stop is inside the frame, away from line 0");
+
+    // Resume the way the backend does (skipBreakpoint_ step + debuggerContinue
+    // + executeFrame). The beam must continue from the stop position.
+    board.debugger_continue();
+    board.single_step(true);           // DCR B — step over the breakpoint
+    CHECK_EQ((unsigned)frameAtStop, (unsigned)board.get_frame_no(),
+             "resume does NOT start a new frame");
+    CHECK(filler.rasterLine() >= lineAtStop && filler.rasterLine() < 312,
+          "beam continues from the stop position, no reset to line 0");
+
+    // Several run→BP→read cycles inside the same frame: each stop must be
+    // deeper into the frame (this is the pattern the beam-race probes use).
+    int prevLine = lineAtStop;
+    for (int stop = 0; stop < 5; ++stop) {
+        board.execute_frame_with_cadence(true, false);
+        CHECK_EQ(0x0008, i8080_pc(), "re-stopped at breakpoint");
+        CHECK_EQ((unsigned)frameAtStop, (unsigned)board.get_frame_no(),
+                 "frame_no stable across mid-frame resumes");
+        if (!(filler.rasterLine() > prevLine && filler.rasterLine() < 312)) {
+            printf("  stop %d: line=%d (prev %d) — expected strict advance\n",
+                   stop, filler.rasterLine(), prevLine);
+            CHECK(false, "raster advances monotonically within the frame");
+            break;
+        }
+        CHECK(true, "raster advances monotonically within the frame");
+        prevLine = filler.rasterLine();
+        board.debugger_continue();
+        board.single_step(true);       // DCR B — step over the breakpoint
+    }
+
+    // With the breakpoint gone, the interrupted frame must run to its end
+    // while keeping its original frame number.
+    board.remove_breakpoint(0, 0x0008, 1);
+    board.execute_frame_with_cadence(true, false);
+    CHECK(filler.brk, "resumed frame completes at the end of frame");
+    CHECK_EQ((unsigned)frameAtStop, (unsigned)board.get_frame_no(),
+             "completing the resumed frame does not bump frame_no");
+
+    // Only the NEXT call after a completed frame starts a new one.
+    board.execute_frame_with_cadence(true, false);
+    CHECK_EQ((unsigned)(frameAtStop + 1), (unsigned)board.get_frame_no(),
+             "frame_no increments only at a real frame boundary");
+    CHECK(filler.brk, "the new frame runs to its own end-of-frame break");
+
+    board.debugger_detached();
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1118,6 +1240,7 @@ int main()
     
     test_board_smoke();
     test_breakpoint_sync_removal();
+    test_beam_continues_after_midframe_resume();
     
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

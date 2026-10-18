@@ -598,7 +598,7 @@ void McpServer::registerBreakpointTools() {
     // debug_set_breakpoint
     {
         auto tool = mcp::tool_builder("debug_set_breakpoint")
-            .with_description("Set a breakpoint at an address.")
+            .with_description("Set a breakpoint at an address. Must be called AFTER debug_load_rom completes (load clears all breakpoints). Issue debug_list_breakpoints only as a separate subsequent call, never batched in parallel with this one.")
             .with_number_param("address", "Breakpoint address (0..65535)")
             .build();
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
@@ -1132,7 +1132,7 @@ void McpServer::registerRomTools() {
     // debug_load_rom
     {
         auto tool = mcp::tool_builder("debug_load_rom")
-            .with_description("Load a ROM file into memory.")
+            .with_description("Load a ROM file into memory. WARNING: loading clears ALL breakpoints, debug history and runtime analysis state from the previous session, and resets the CPU to Paused — so set breakpoints only after this call completes. Do not batch this with other debugger calls in parallel; issue them sequentially.")
             .with_string_param("path", "Path to the ROM file")
             .with_number_param("org", "Origin address (default 0)", false)
             .build();

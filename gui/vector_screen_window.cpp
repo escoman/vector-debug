@@ -322,8 +322,10 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
     float totalH = static_cast<float>(fullH * zoom);
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    // Reserve space for status bar at the bottom
-    float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 6;
+    // Reserve space for status bar at the bottom:
+    // the "Screen:" line, plus the "Beam:" line when the overlay is on.
+    int statusLines = showBeam_ ? 2 : 1;
+    float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() * statusLines + 6;
     avail.y -= statusBarHeight;
 
     ImVec2 imageSize;

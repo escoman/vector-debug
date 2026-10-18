@@ -67,17 +67,17 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         // Row 0: ; 1 2 3 4 5 6 7 8 9 0 - /
         //   RU: ; 1 2 3 4 5 6 7 8 9 0 - /
         //   EN: + ! @ # $ % ^ & * ( ) _ ?
-        {0.0f, 0, 1, 1, SC_SEMICOLON, "+",  ";",  KC_ALPHA},
+        {0.0f, 0, 1, 1, SC_SEMICOLON,   "+",  ";",  KC_ALPHA},
         {1.0f, 0, 1, 1, SC_1,           "!",  "1",  KC_ALPHA},
-        {2.0f, 0, 1, 1, SC_2,           "@",  "2",  KC_ALPHA},
+        {2.0f, 0, 1, 1, SC_2,           "\"",  "2",  KC_ALPHA},
         {3.0f, 0, 1, 1, SC_3,           "#",  "3",  KC_ALPHA},
         {4.0f, 0, 1, 1, SC_4,           "$",  "4",  KC_ALPHA},
         {5.0f, 0, 1, 1, SC_5,           "%",  "5",  KC_ALPHA},
-        {6.0f, 0, 1, 1, SC_6,           "^",  "6",  KC_ALPHA},
-        {7.0f, 0, 1, 1, SC_7,           "&",  "7",  KC_ALPHA},
-        {8.0f, 0, 1, 1, SC_8,           "*",  "8",  KC_ALPHA},
-        {9.0f, 0, 1, 1, SC_9,           "(",  "9",  KC_ALPHA},
-        {10.0f,0, 1, 1, SC_0,           ")",  "0",  KC_ALPHA},
+        {6.0f, 0, 1, 1, SC_6,           "&",  "6",  KC_ALPHA},
+        {7.0f, 0, 1, 1, SC_7,           " ",  "7",  KC_ALPHA},
+        {8.0f, 0, 1, 1, SC_8,           "(",  "8",  KC_ALPHA},
+        {9.0f, 0, 1, 1, SC_9,           ")",  "9",  KC_ALPHA},
+        {10.0f,0, 1, 1, SC_0,           " ",  "0",  KC_ALPHA},
         {11.0f,0, 1, 1, SC_EQUALS,      "=",  "-",  KC_ALPHA},  // '-' / '=' (top row)
         {12.0f,0, 1, 1, SC_SLASH,       "?",  "/",  KC_ALPHA},
 
@@ -94,7 +94,7 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         {8.5f, 1, 1, 1, SC_RBRACKET,    "]",  "\xd1\x89", KC_ALPHA},  // щ
         {9.5f, 1, 1, 1, SC_Z,           "Z",  "\xd0\xb7", KC_ALPHA},  // з
         {10.5f,1, 1, 1, SC_H,           "H",  "\xd1\x85", KC_ALPHA},  // х
-        {11.5f,1, 1, 1, SC_APOSTROPHE,  "'",  ":",      KC_ALPHA},
+        {11.5f,1, 1, 1, SC_APOSTROPHE,  "*",  ":",      KC_ALPHA},
 
         // Row 2: US F Y W A P R O L D V \ .
         //   RU: УС Ф Ы В А П Р О Л Д Ж Э .

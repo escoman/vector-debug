@@ -32,12 +32,18 @@ copy a torn framebuffer.
 - `screenMutex_` guarded nothing: only the reader locked it, while the emulation
   thread wrote the TV buffer continuously, so `debug_get_screen_snapshot` and the
   GUI texture could capture a framebuffer caught mid-write. Both write paths
-  (`executeFrame`, `stepInstruction`) now hold the mutex for the call, and the
-  reader takes it with `try_lock`: on contention it serves the last tear-free
-  copy instead of blocking the GUI render loop or the MCP transport. Lock order
-  is always `screenMutex_` → `lastScreenMutex_` and the emulation thread never
-  takes the cache mutex, so no cycle exists. A paused emulator holds no lock,
-  keeping mid-frame inspection immediate.
+  (`executeFrame`, `stepInstruction`) now hold the mutex for the call, so a reader
+  that owns it copies a buffer nobody is painting. The reader takes it with
+  `try_lock` and never blocks the GUI render loop or the MCP transport behind a
+  running frame. To keep the on-screen update rate tied to the emulation frame
+  rate rather than to who happens to win the `try_lock` race, the emulation thread
+  also publishes every completed frame into the `lastScreen_` cache at the frame
+  boundary (still under `screenMutex_`), so a reader that loses the race is served
+  the newest whole frame instead of one of unknown age — this removed a regression
+  where a slow `executeFrame` starved the Vector Screen into rare updates. Lock
+  order is always `screenMutex_` → `lastScreenMutex_` on both the reader and the
+  writer, so no cycle exists. A paused emulator holds no lock, so the `try_lock`
+  success path still reads a mid-frame buffer immediately.
 - The GUI screen window read the beam and the texture in separate passes and
   could draw them out of sync; it now reads the beam once per frame and passes it
   down. When the frame is partial the stale region below the beam is dimmed, the

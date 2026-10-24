@@ -472,6 +472,12 @@ private:
     // every target call that lets the raster paint the TV framebuffer
     // (executeFrame, stepInstruction). Readers take it with try_lock, so they
     // never block behind a running frame — they get the last tear-free copy.
+    //
+    // The emulation thread also PUBLISHES every completed frame into
+    // lastScreen_ (see publishLastScreenLocked_), so a reader that loses the
+    // try_lock race still returns the newest whole frame. This decouples the
+    // GUI/MCP update rate from lock contention: it now tracks the emulation
+    // frame rate instead of how often a reader happens to win the live buffer.
 
     mutable std::mutex screenMutex_;
 
@@ -490,5 +496,12 @@ private:
 
     void executeCommand(Command &cmd);
     TraceExecutionResult executeTraceInternal(const TraceExecutionParams &params);
+
+    // Copy the current TV framebuffer into the lastScreen_ cache. MUST be
+    // called while the caller already owns screenMutex_ (the raster is not
+    // painting), at a frame boundary. Takes lastScreenMutex_ internally, so
+    // the lock order stays screenMutex_ -> lastScreenMutex_ and matches the
+    // reader in screenSnapshot(), which never introduces a cycle.
+    void publishLastScreenLocked_() const;
 
 };

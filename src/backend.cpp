@@ -526,8 +526,11 @@ StepResult DebugBackend::stepInstructionDetailed()
     {
         // single_step(true) advances the raster too, so the TV framebuffer is
         // written here as well: keep readers out of it (see screenSnapshot).
+        // Publish the resulting buffer so the cache tracks the step even for a
+        // reader that happened to miss the try_lock window.
         std::lock_guard<std::mutex> screenLock(screenMutex_);
         target_->stepInstruction();
+        publishLastScreenLocked_();
     }
     steppingInProgress_ = false;
     int cycles = target_->getCpuState().cycles;
@@ -1546,21 +1549,40 @@ DebugBackend::executeTraceInternal(const TraceExecutionParams &params)
 // Stage 4.2: Screen snapshot
 // ---------------------------------------------------------------------------
 
+// Publish the just-completed frame into the reader cache. The caller owns
+// screenMutex_ (the raster is not painting), so target_->screenSnapshot()
+// copies a stable buffer. We then hand it to lastScreen_ under
+// lastScreenMutex_. This is the writer-side counterpart that keeps the cache
+// current even when readers keep losing the try_lock race in screenSnapshot().
+void DebugBackend::publishLastScreenLocked_() const
+{
+    ScreenData data = target_->screenSnapshot();
+    if (data.pixels.empty()) return;
+
+    std::lock_guard<std::mutex> cacheGuard(lastScreenMutex_);
+    lastScreen_.pixels = std::move(data.pixels);
+    lastScreen_.width  = data.width;
+    lastScreen_.height = data.height;
+}
+
 DebugBackend::ScreenSnapshot DebugBackend::screenSnapshot() const
 {
-    // screenMutex_ is now also taken by the emulation thread around every
-    // target call that lets the raster write the TV framebuffer
-    // (executeFrame / stepInstruction), so a reader that owns it copies a
-    // buffer nobody is touching. The acquisition is a try_lock on purpose:
-    // while the emulator runs, the beam writes pixels continuously, and a
-    // blocking wait would stall the GUI render loop / MCP transport for up to
-    // a frame. On contention the previous tear-free copy is served instead —
-    // one frame older beats a mixture of two frames cut mid-copy.
+    // screenMutex_ is taken by the emulation thread around every target call
+    // that lets the raster write the TV framebuffer (executeFrame /
+    // stepInstruction), so a reader that owns it copies a buffer nobody is
+    // touching. The acquisition is a try_lock on purpose: while the emulator
+    // runs, the beam writes pixels continuously, and a blocking wait would
+    // stall the GUI render loop / MCP transport for up to a frame.
     //
-    // lastScreenMutex_ guards the cache independently: another reader may be
-    // filling it while this one failed the try_lock and only reads. Lock order
-    // is always screenMutex_ -> lastScreenMutex_, and the emulation thread
-    // never takes lastScreenMutex_, so no cycle exists.
+    // On contention we no longer serve a stale snapshot of unknown age: the
+    // emulation thread publishes every completed frame into lastScreen_ (see
+    // publishLastScreenLocked_), so the cache already holds the newest whole
+    // frame. The try_lock success path here mainly serves the PAUSED case, where
+    // the emulator holds no lock and a mid-frame buffer should be inspected
+    // immediately rather than the last boundary frame.
+    //
+    // lastScreenMutex_ guards the cache independently. Lock order is always
+    // screenMutex_ -> lastScreenMutex_, matching the writer, so no cycle.
     std::unique_lock<std::mutex> live(screenMutex_, std::try_to_lock);
     std::lock_guard<std::mutex> cacheGuard(lastScreenMutex_);
 
@@ -2058,6 +2080,11 @@ void DebugBackend::executeFramesTarget_()
             // all, which keeps mid-frame inspection immediate.
             std::lock_guard<std::mutex> screenLock(screenMutex_);
             target_->executeFrame();
+            // Publish the just-completed frame so readers keep updating at the
+            // emulation frame rate even while they keep losing the try_lock
+            // race against the next executeFrame(). Still under screenMutex_,
+            // so the buffer we copy is not being painted.
+            publishLastScreenLocked_();
         }
         uint16_t pcAfterFrame = target_->getCpuState().pc;
 

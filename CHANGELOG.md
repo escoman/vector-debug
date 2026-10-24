@@ -10,6 +10,45 @@ The top-most `## [X.Y.Z]` section is used as the GitHub Release notes body
 Prepend new versions at the top; keep this first HTML comment free of `## [` lines.
 -->
 
+## [0.6.7] - 2026-10-24
+
+Trustworthy screen snapshots when the debugger stops inside a frame: `debug_get_screen_snapshot`
+now reports a mid-frame picture as partial, and concurrent readers can no longer
+copy a torn framebuffer.
+
+### Fixed
+- `complete_frame` answered `true` for a picture that was half this frame and
+  half the previous one. A breakpoint, watchpoint or single step that stops the
+  CPU *inside* a frame leaves the TV framebuffer new above the beam and stale
+  below it — correct for a slow LCD TV, but not a complete frame. The flag was
+  derived from "is the emulator running", which says nothing about the video
+  pass. `BeamState` now carries `frameIncomplete`, read straight from the video
+  path (`PixelFiller::brk`: set when the raster wraps at the end of a frame,
+  cleared only by `filler.reset()` in the `execute_frame` preamble), and
+  `complete_frame` means `paused && frame complete`. MCP exposes `frame_incomplete`
+  and `raster_line` (the tear point) on both `debug_get_screen_snapshot` metadata
+  and `debug_get_beam_state`. An agent analyzing a screenshot no longer has to
+  guess which scanline the mix happened on.
+- `screenMutex_` guarded nothing: only the reader locked it, while the emulation
+  thread wrote the TV buffer continuously, so `debug_get_screen_snapshot` and the
+  GUI texture could capture a framebuffer caught mid-write. Both write paths
+  (`executeFrame`, `stepInstruction`) now hold the mutex for the call, and the
+  reader takes it with `try_lock`: on contention it serves the last tear-free
+  copy instead of blocking the GUI render loop or the MCP transport. Lock order
+  is always `screenMutex_` → `lastScreenMutex_` and the emulation thread never
+  takes the cache mutex, so no cycle exists. A paused emulator holds no lock,
+  keeping mid-frame inspection immediate.
+- The GUI screen window read the beam and the texture in separate passes and
+  could draw them out of sync; it now reads the beam once per frame and passes it
+  down. When the frame is partial the stale region below the beam is dimmed, the
+  tear line is drawn, and the status line says `frame incomplete: below beam =
+  previous frame`.
+
+### Notes
+- `debug_pause` was never affected: `poll_debugger` runs at the top of
+  `Board::execute_frame`, so a user pause always lands on a frame boundary. Only
+  breakpoints, watchpoints and steps stop mid-frame.
+
 ## [0.6.6] - 2026-10-16
 
 Byte-for-byte round-trip integrity for ROMs that contain unassigned i8080

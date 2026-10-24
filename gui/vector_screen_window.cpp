@@ -180,7 +180,7 @@ void VectorScreenWindow::renderToolbar(IDebugBackend &backend)
 // Coordinate info bar
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
+void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend, const BeamState &beam)
 {
     auto video = backend.videoModeSnapshot();
 
@@ -209,22 +209,26 @@ void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
     if (showBeam_) {
         if (!backend.isPaused()) {
             ImGui::Text("Beam: (pause emulation to view)");
+        } else if (!beam.available) {
+            ImGui::Text("Beam: (unavailable)");
         } else {
-            BeamState beam = backend.beamState();
-            if (!beam.available) {
-                ImGui::Text("Beam: (unavailable)");
-            } else if (beam.visible) {
+            // Suffix telling the user the picture is a mid-frame mix: lines
+            // below the beam still show the previous frame.
+            const char *partial =
+                beam.frameIncomplete ? "  [frame incomplete: below beam = previous frame]" : "";
+            if (beam.visible) {
                 // Same content-coordinate convention as the Screen readout.
                 int contentX = video.mode512 ? beam.visibleX : (beam.visibleX / 2);
-                ImGui::Text("Beam: X: %d  Y: %d  (line %u)",
-                            contentX, beam.visibleY, beam.rasterLine);
+                ImGui::Text("Beam: X: %d  Y: %d  (line %u)%s",
+                            contentX, beam.visibleY, beam.rasterLine, partial);
             } else if (beam.fbX >= 0 && beam.fbY >= 0) {
                 // Beam is over the border area but still on the displayed frame.
-                ImGui::Text("Beam: (border) FB X: %d  Y: %d  (line %u)",
-                            beam.fbX, beam.fbY, beam.rasterLine);
+                ImGui::Text("Beam: (border) FB X: %d  Y: %d  (line %u)%s",
+                            beam.fbX, beam.fbY, beam.rasterLine, partial);
             } else {
                 // Beam is off-display during vsync retrace.
-                ImGui::Text("Beam: (off-display, line %u)", beam.rasterLine);
+                ImGui::Text("Beam: (off-display, line %u)%s",
+                            beam.rasterLine, partial);
             }
         }
     }
@@ -297,7 +301,7 @@ void VectorScreenWindow::renderContextMenu(IDebugBackend &backend)
 // Screen rendering (main area)
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderScreen(IDebugBackend &backend)
+void VectorScreenWindow::renderScreen(IDebugBackend &backend, const BeamState &beam)
 {
     if (textureId_ == 0) {
         ImGui::TextDisabled("(texture not created)");
@@ -394,7 +398,22 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
     // Beam overlay: a blinking marker at the current raster position, shown
     // only while paused. Sized in framebuffer pixels so it scales with zoom.
     if (showBeam_ && backend.isPaused()) {
-        BeamState beam = backend.beamState();
+        // A mid-frame stop (breakpoint inside a frame) leaves the TV buffer
+        // mixed: lines above the beam are this frame, lines below are still
+        // the previous one. That is correct behaviour of the raster, but it
+        // reads like a broken picture, so the stale half is dimmed and cut off
+        // with a divider at the beam row.
+        if (beam.available && beam.frameIncomplete && beam.fbY >= 0) {
+            const float sy = imageSize.y / static_cast<float>(fullH);
+            const float dividerY = imgPos.y + (beam.fbY + 1) * sy;
+            drawList->AddRectFilled(ImVec2(imgPos.x, dividerY), imgEnd,
+                                    IM_COL32(0, 0, 0, 70));
+            drawList->AddLine(ImVec2(imgPos.x, dividerY),
+                              ImVec2(imgEnd.x, dividerY),
+                              IM_COL32(255, 220, 60, 200),
+                              sy < 1.0f ? 1.0f : sy);
+        }
+
         // fbX/fbY are full-framebuffer coordinates and remain valid while the
         // beam sweeps the border, so the marker shows for line 299 (bottom
         // border) too. -1 means the beam is off-display (vsync retrace).
@@ -549,6 +568,13 @@ void VectorScreenWindow::render(IDebugBackend &backend)
     renderToolbar(backend);
     ImGui::Separator();
 
+    // One beam read per frame: the texture, the marker and the status line
+    // must describe the same instant. Reading it again further down would let
+    // a run -> pause transition landing between the two calls draw the marker
+    // onto a picture grabbed at another moment. Skipped entirely when the
+    // overlay is off — an unavailable BeamState renders nothing.
+    const BeamState beam = showBeam_ ? backend.beamState() : BeamState{};
+
     // Get/update screen data
     if (liveMode_) {
         auto snap = backend.screenSnapshot();
@@ -567,14 +593,14 @@ void VectorScreenWindow::render(IDebugBackend &backend)
     }
 
     // Render screen area
-    renderScreen(backend);
+    renderScreen(backend, beam);
 
     // Context menu
     renderContextMenu(backend);
 
     // Status bar at the bottom using footer region
     ImGui::Separator();
-    renderCoordinateInfo(backend);
+    renderCoordinateInfo(backend, beam);
 
     ImGui::End();
 }

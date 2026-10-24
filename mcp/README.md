@@ -159,8 +159,8 @@ Limits (§16): `MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS=40000`, `MAX_SEARCH_MATCHES=1
 ### Raster / Beam — Stage 6.27 (3)
 | Tool | Description |
 |---|---|
-| `debug_get_beam_state` | Read-only snapshot of the video beam/raster position (`frame`, `raster_line`, `v_cycle_in_frame`/`_in_line`, `rpixel`), the visible-area coords, the CPU `pc`/`opcode` beside the beam, and the palette entry the video path is currently shifting out (`palette_index`/`palette_value`) plus the separate hardware `border_index`. Timing constants (`line_v_cycles=768`, `frame_lines=312`, `frame_v_cycles=239616`) come from the emulator's video model, never computed by MCP. |
-| `debug_get_screen_snapshot` | The real TV framebuffer, encoded as a PNG returned as MCP **image content** plus a JSON metadata text item (`width`, `height`, `frame`, `source:"tv"`, `format:"RGB"`, `complete_frame`). This is the composed output — NOT a reconstruction from VRAM — so it reveals mid-frame raster/palette effects. |
+| `debug_get_beam_state` | Read-only snapshot of the video beam/raster position (`frame`, `raster_line`, `v_cycle_in_frame`/`_in_line`, `rpixel`), the visible-area coords, the CPU `pc`/`opcode` beside the beam, and the palette entry the video path is currently shifting out (`palette_index`/`palette_value`) plus the separate hardware `border_index`. `frame_incomplete` is true while the video path has not finished a full pass over the frame. Timing constants (`line_v_cycles=768`, `frame_lines=312`, `frame_v_cycles=239616`) come from the emulator's video model, never computed by MCP. |
+| `debug_get_screen_snapshot` | The real TV framebuffer, encoded as a PNG returned as MCP **image content** plus a JSON metadata text item (`width`, `height`, `frame`, `source:"tv"`, `format:"RGB"`, `complete_frame`, `frame_incomplete`, `raster_line`). This is the composed output — NOT a reconstruction from VRAM — so it reveals mid-frame raster/palette effects. |
 | `debug_get_raster_events` | Ring of `OUT` instructions, each correlated with the exact beam position (`frame`, `v_cycle`, `raster_line`, `v_cycle_in_line`) and `pc`/`port`/`value` at the moment it executed (recorded on the emulation thread). Optional filters: `frame`, `v_cycle_start`/`v_cycle_end`, `port`, `pc`, `max_results` (default 1000, cap 50000). |
 
 All three are read-only: they never pause, step, reset or re-render the
@@ -209,6 +209,16 @@ Typical investigation:
    compare against `debug_get_vram_bytes` — a divergence is the signature of a
    racing-the-beam effect.
 3. `debug_get_beam_state` to anchor a breakpoint/step to a beam position.
+
+> **Paused does not mean complete picture.** A breakpoint, watchpoint or single
+> step that stops the CPU *inside* a frame leaves the TV framebuffer holding the
+> new frame above the beam and the previous frame below it. That mixture is the
+> correct emulation of a real slow LCD TV — read `frame_incomplete` (and
+> `raster_line` for the tear point) before concluding the image is a whole frame:
+> `complete_frame` is true only when the emulator is paused **and** the video
+> path has finished its pass. `debug_pause` is not affected: the debugger is
+> polled at the top of `execute_frame`, so a user pause always lands on a frame
+> boundary. The GUI screen window dims the stale half and draws the tear line.
 
 ## Architecture
 

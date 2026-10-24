@@ -523,7 +523,12 @@ StepResult DebugBackend::stepInstructionDetailed()
     // onMemoryRead() so the fetch counters owned by this function are not
     // double-counted when the callback fires for each operand byte.
     steppingInProgress_ = true;
-    target_->stepInstruction();
+    {
+        // single_step(true) advances the raster too, so the TV framebuffer is
+        // written here as well: keep readers out of it (see screenSnapshot).
+        std::lock_guard<std::mutex> screenLock(screenMutex_);
+        target_->stepInstruction();
+    }
     steppingInProgress_ = false;
     int cycles = target_->getCpuState().cycles;
 
@@ -1543,16 +1548,32 @@ DebugBackend::executeTraceInternal(const TraceExecutionParams &params)
 
 DebugBackend::ScreenSnapshot DebugBackend::screenSnapshot() const
 {
-    ScreenSnapshot snap;
+    // screenMutex_ is now also taken by the emulation thread around every
+    // target call that lets the raster write the TV framebuffer
+    // (executeFrame / stepInstruction), so a reader that owns it copies a
+    // buffer nobody is touching. The acquisition is a try_lock on purpose:
+    // while the emulator runs, the beam writes pixels continuously, and a
+    // blocking wait would stall the GUI render loop / MCP transport for up to
+    // a frame. On contention the previous tear-free copy is served instead —
+    // one frame older beats a mixture of two frames cut mid-copy.
+    //
+    // lastScreenMutex_ guards the cache independently: another reader may be
+    // filling it while this one failed the try_lock and only reads. Lock order
+    // is always screenMutex_ -> lastScreenMutex_, and the emulation thread
+    // never takes lastScreenMutex_, so no cycle exists.
+    std::unique_lock<std::mutex> live(screenMutex_, std::try_to_lock);
+    std::lock_guard<std::mutex> cacheGuard(lastScreenMutex_);
 
-    std::lock_guard<std::mutex> lock(screenMutex_);
+    if (live.owns_lock()) {
+        ScreenData data = target_->screenSnapshot();
+        if (!data.pixels.empty()) {
+            lastScreen_.pixels = std::move(data.pixels);
+            lastScreen_.width  = data.width;
+            lastScreen_.height = data.height;
+        }
+    }
 
-    ScreenData data = target_->screenSnapshot();
-    snap.pixels = std::move(data.pixels);
-    snap.width  = data.width;
-    snap.height = data.height;
-
-    return snap;
+    return lastScreen_;
 }
 
 // ---------------------------------------------------------------------------
@@ -2026,7 +2047,18 @@ void DebugBackend::executeFramesTarget_()
 
         target_->debuggerContinue();
         uint16_t pcBeforeFrame = target_->getCpuState().pc;
-        target_->executeFrame();
+        {
+            // The beam paints the TV framebuffer line by line inside this
+            // call. Holding screenMutex_ for the whole frame makes the
+            // concurrent readers (Vector Screen / debug_get_screen_snapshot)
+            // land on a frame boundary instead of copying a torn mixture of
+            // two frames. The frame-pacing sleep below stays outside the
+            // lock, so a reader never waits longer than the frame's own
+            // emulation cost. A paused emulator does not hold the lock at
+            // all, which keeps mid-frame inspection immediate.
+            std::lock_guard<std::mutex> screenLock(screenMutex_);
+            target_->executeFrame();
+        }
         uint16_t pcAfterFrame = target_->getCpuState().pc;
 
         // -- Frame pacing: sleep to maintain 50 Hz (20 ms per frame) --------

@@ -1649,10 +1649,12 @@ AgentApiResult<AgentBeamState> AgentApi::getBeamState()
     r.paletteIndex   = bs.paletteIndex;
     r.paletteValue   = bs.paletteValue;
     r.borderIndex    = bs.borderIndex;
+    r.frameIncomplete = bs.frameIncomplete;
 
     std::ostringstream oss;
     oss << "frame=" << r.frame << " line=" << r.rasterLine
-        << " vcycle=" << r.vCycleInFrame;
+        << " vcycle=" << r.vCycleInFrame
+        << (r.frameIncomplete ? " partial" : " complete");
     log_.record("getBeamState", "", oss.str(), elapsedMs(t0));
     return AgentApiResult<AgentBeamState>::ok(std::move(r));
 }
@@ -1685,9 +1687,14 @@ AgentApiResult<AgentScreenSnapshot> AgentApi::getScreenSnapshot()
     result.source = "tv";
     result.format = "RGB";
     result.paletteMode = "raster";
-    // A guaranteed-complete frame only when the emulator is paused; while
-    // running the buffer is still a committed frame but may lag the beam.
-    result.completeFrame = !bs.running;
+    result.rasterLine     = bs.rasterLine;
+    result.frameIncomplete = bs.frameIncomplete;
+    // "Paused" does NOT mean "complete picture". The beam writes the TV buffer
+    // progressively, so a breakpoint inside a frame leaves the lines below it
+    // from the previous frame; Board::frame_incomplete is the only truth about
+    // that. While running, the buffer also may lag the beam, so it never
+    // counts as a guaranteed-complete frame either.
+    result.completeFrame = !bs.running && !bs.frameIncomplete;
 
     // ARGB8888 -> RGBA8888 (byte order for the PNG encoder).
     const size_t n = static_cast<size_t>(snap.width) * static_cast<size_t>(snap.height);
@@ -1704,7 +1711,8 @@ AgentApiResult<AgentScreenSnapshot> AgentApi::getScreenSnapshot()
     result.pngBase64 = png::base64Encode(png);
 
     std::ostringstream oss;
-    oss << result.width << "x" << result.height << " png=" << png.size() << "B";
+    oss << result.width << "x" << result.height << " png=" << png.size() << "B"
+        << (result.completeFrame ? " complete" : " partial");
     log_.record("getScreenSnapshot", "", oss.str(), elapsedMs(t0));
     return AgentApiResult<AgentScreenSnapshot>::ok(std::move(result));
 }

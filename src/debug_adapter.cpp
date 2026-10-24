@@ -614,6 +614,18 @@ BeamState DebugAdapter::getBeamState()
     }
     s.borderIndex = io.BorderIndex();
 
+    // Frame completeness straight from the video path. filler.brk is set when
+    // the raster wraps at the end of a frame and cleared only by filler.reset()
+    // in the execute_frame preamble, so "brk == false" means the beam has not
+    // finished a full pass since the last reset: the lines below it still hold
+    // the previous frame. That is exactly the state a mid-frame breakpoint (or
+    // a pause, or stepping) leaves in the TV framebuffer.
+    // Board::frame_incomplete is the same window seen by the resumption logic,
+    // but it is false before the very first frame is ever started and after a
+    // reset, where the buffer holds nothing drawn at all — so brk is the
+    // authoritative source for the picture, not the frame counter.
+    s.frameIncomplete = !filler.brk;
+
     return s; // 'running' is filled in by DebugBackend (it owns the state machine)
 }
 

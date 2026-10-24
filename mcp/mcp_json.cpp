@@ -286,6 +286,12 @@ json screenSnapshotToJson(const AgentScreenSnapshot &snap) {
         {"pixel_count",    static_cast<int>(snap.pixels.size())},
         {"frame",          snap.frame},
         {"complete_frame", snap.completeFrame},
+        // Partial-frame diagnostics: a mid-frame breakpoint leaves the lines
+        // below `raster_line` holding the previous frame, so the image is a
+        // mix. Consumers that need a whole picture must check this instead of
+        // assuming "paused == complete".
+        {"frame_incomplete", snap.frameIncomplete},
+        {"raster_line",    snap.rasterLine},
         {"format",         snap.format},
         {"source",         snap.source},
         {"palette_mode",   snap.paletteMode},
@@ -316,6 +322,7 @@ json beamStateToJson(const AgentBeamState &beam) {
     j["palette_index"]    = beam.paletteIndex;   // -1 when not applicable
     j["palette_value"]    = beam.paletteValue;
     j["border_index"]     = beam.borderIndex;    // separate HW border index
+    j["frame_incomplete"] = beam.frameIncomplete; // paused mid-frame => partial picture
     return j;
 }
 

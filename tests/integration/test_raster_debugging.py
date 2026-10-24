@@ -13,6 +13,8 @@
 #   §36/§37  beam invariants (ranges, timing constants)            [always]
 #   §38      screen snapshot PNG exists, correct dims, decodable   [always]
 #   §40      raster events monotonic beam, correct pc/port/value   [always]
+#   §44      partial-frame reporting: a mid-frame stop is never     [always]
+#            reported as complete_frame (BUG_vdbg_screen_snapshot)  + BP [gated]
 #   §42/§43  racing-the-beam on fire3 (OUT 0Ch mapped to v_cycle)  [gated]
 #
 # Usage:
@@ -284,6 +286,96 @@ def _snapshot_png(c):
 
 
 # ---------------------------------------------------------------------------
+# §44 — partial frame reporting (BUG_vdbg_screen_snapshot)
+#
+# The beam writes the TV framebuffer line by line, so a CPU stop inside a
+# frame leaves the lines below the beam from the PREVIOUS frame. That picture
+# is a mix, and "paused" alone does not make it complete: the tools must say
+# so via frame_incomplete / complete_frame.
+# ---------------------------------------------------------------------------
+
+def _snapshot_meta(c):
+    content = c.content("debug_get_screen_snapshot", {})
+    if not content:
+        return None
+    txt = next((c2 for c2 in content if c2.get("type") == "text"), None)
+    return json.loads(txt["text"]) if txt else None
+
+
+def _check_complete_frame_invariant(c, label):
+    """complete_frame must equal (not running and not frame_incomplete)."""
+    beam, _ = c.tool_json("debug_get_beam_state", {})
+    meta = _snapshot_meta(c)
+    if not beam or meta is None:
+        check(False, f"{label}: beam state and snapshot metadata available")
+        return None, None
+    check("frame_incomplete" in beam, f"{label}: beam carries frame_incomplete")
+    check("frame_incomplete" in meta and "raster_line" in meta,
+          f"{label}: metadata carries frame_incomplete + raster_line")
+    want = (not beam["running"]) and (not beam["frame_incomplete"])
+    check(meta["complete_frame"] == want,
+          f"{label}: complete_frame == not running and not frame_incomplete "
+          f"(got {meta['complete_frame']}, want {want})")
+    return beam, meta
+
+
+def test_partial_frame_reporting(c):
+    c.tool_json("debug_pause", {})
+    time.sleep(0.05)
+    _check_complete_frame_invariant(c, "paused")
+
+    # Sample the PC while running and keep an address that shows up more than
+    # once — that is code the program executes in a loop, so a breakpoint there
+    # is guaranteed to be hit again and, with overwhelming probability, inside
+    # a frame rather than at its very end.
+    c.tool_json("debug_run", {})
+    seen = []
+    for _ in range(8):
+        st, _ = c.tool_json("debug_get_state", {})
+        if st and st.get("cpu"):
+            seen.append(st["cpu"]["pc"])
+        time.sleep(0.03)
+    c.tool_json("debug_pause", {})
+    time.sleep(0.05)
+    _check_complete_frame_invariant(c, "after run+pause")
+
+    hot = next((pc for pc in set(seen) if seen.count(pc) >= 2), None)
+    if hot is None:
+        print("    SKIP mid-frame breakpoint: no repeating PC sampled")
+        return
+
+    addr = int(hot, 16)
+    c.tool_json("debug_set_breakpoint", {"address": addr})
+    c.tool_json("debug_run", {})
+    hit = False
+    for _ in range(40):
+        time.sleep(0.05)
+        st, _ = c.tool_json("debug_get_state", {})
+        if st and not st["running"]:
+            hit = True
+            break
+    c.tool_json("debug_remove_breakpoint", {"address": addr})
+    if not hit:
+        check(False, f"breakpoint {hot} hit")
+        return
+
+    beam, meta = _check_complete_frame_invariant(c, f"bp {hot} hit")
+    if beam and meta:
+        inside_frame = beam["raster_line"] < beam["frame_lines"] - 1
+        if inside_frame:
+            check(beam["frame_incomplete"] is True,
+                  f"stop on line {beam['raster_line']} of {beam['frame_lines']}: "
+                  f"frame_incomplete is True")
+            check(meta["complete_frame"] is False,
+                  "partial frame is NOT reported as complete_frame")
+            check(meta["raster_line"] == beam["raster_line"],
+                  "metadata raster_line matches the beam")
+        else:
+            print(f"    note: stop landed at the end of frame (line "
+                  f"{beam['raster_line']}) — partial check skipped")
+
+
+# ---------------------------------------------------------------------------
 
 def main():
     print("\n=== Stage 6.27 Raster/Beam MCP tools — integration ===")
@@ -307,6 +399,7 @@ def main():
             test_beam_state(c)
             test_screen_snapshot(c)
             test_raster_events(c)
+            test_partial_frame_reporting(c)
 
             if FIRE3 and os.path.isfile(FIRE3):
                 print("\n--- fire3 racing-the-beam ---")

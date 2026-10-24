@@ -6,6 +6,7 @@
 
 // Forward declarations
 class IDebugBackend;
+struct BeamState;
 
 // ---------------------------------------------------------------------------
 // Vector Screen Window — live Vector-06C framebuffer view
@@ -77,6 +78,8 @@ private:
     // When enabled and the emulation is paused, draw a blinking marker at the
     // beam's current raster position and report its coordinates in the status
     // bar. The marker is sized in framebuffer pixels so it scales with zoom.
+    // A mid-frame stop also draws a tear line at the beam row: the content
+    // below it still belongs to the previous frame (BeamState::frameIncomplete).
     bool showBeam_ = false;
 
     // -- Texture -------------------------------------------------------------
@@ -94,9 +97,11 @@ private:
     bool hoverBorder_ = false;                     // mouse over border area
 
     // -- Sub-render methods --------------------------------------------------
+    // beam is read ONCE per frame in render() and passed down, so the texture,
+    // the marker and the status line always describe the same instant.
     void renderToolbar(IDebugBackend &backend);
-    void renderScreen(IDebugBackend &backend);
-    void renderCoordinateInfo(IDebugBackend &backend);
+    void renderScreen(IDebugBackend &backend, const BeamState &beam);
+    void renderCoordinateInfo(IDebugBackend &backend, const BeamState &beam);
     void renderContextMenu(IDebugBackend &backend);
 
     // -- Helpers -------------------------------------------------------------

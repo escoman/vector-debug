@@ -468,8 +468,19 @@ private:
     mutable std::mutex ioRegMutex_;
 
     // -- Screen mutex -------------------------------------------------------
+    // Writers: the emulation thread holds screenMutex_ for the duration of
+    // every target call that lets the raster paint the TV framebuffer
+    // (executeFrame, stepInstruction). Readers take it with try_lock, so they
+    // never block behind a running frame — they get the last tear-free copy.
 
     mutable std::mutex screenMutex_;
+
+    // Last frame the reader could copy without contention. Guarded by its own
+    // mutex because a reader that failed the try_lock still has to read it
+    // while another reader is filling it.
+
+    mutable std::mutex lastScreenMutex_;
+    mutable ScreenSnapshot lastScreen_;
 
     // -- Command Queue (Stage 5.3.2) ----------------------------------------
 

@@ -2252,6 +2252,7 @@ static void test_get_beam_state()
     s.cpuPc = 0x1234; s.cpuOpcode = 0xCD;
     s.hasPaletteIndex = true; s.paletteIndex = 5; s.paletteValue = 0xA3;
     s.borderIndex = 1;
+    s.frameIncomplete = true;   // mid-frame stop
     mock.setBeamState(s);
 
     auto r = api.getBeamState();
@@ -2266,6 +2267,7 @@ static void test_get_beam_state()
     CHECK_EQ(5u, (unsigned)r.value.paletteIndex, "palette_index");
     CHECK_EQ(0xA3u, r.value.paletteValue, "palette_value");
     CHECK_EQ(1u, (unsigned)r.value.borderIndex, "border_index");
+    CHECK(r.value.frameIncomplete, "frame_incomplete mapped from the video path");
     TEST_END();
 }
 
@@ -2294,6 +2296,34 @@ static void test_get_screen_snapshot_png()
     CHECK(r.value.pngBase64.size() > 8, "png base64 non-empty");
     CHECK(r.value.pngBase64.compare(0, 8, "iVBORw0K") == 0,
           "png base64 has PNG signature prefix");
+    TEST_END();
+}
+
+static void test_screen_snapshot_partial_frame()
+{
+    TEST_BEGIN("getScreenSnapshot — mid-frame stop is NOT a complete frame");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Paused on a breakpoint at raster line 100 of 312: the emulator is not
+    // running, but the video path never reached the end-of-frame brk, so the
+    // TV buffer holds this frame above the beam and the previous one below.
+    BeamState bs;
+    bs.available = true;
+    bs.running = false;
+    bs.frame = 7;
+    bs.rasterLine = 100;
+    bs.frameIncomplete = true;
+    mock.setBeamState(bs);
+
+    std::vector<uint32_t> px = { 0xFFFF0000u, 0xFF00FF00u };
+    mock.setScreenSnapshot(2, 1, px);
+
+    auto r = api.getScreenSnapshot();
+    CHECK(r.success, "snapshot succeeds");
+    CHECK(!r.value.completeFrame, "paused mid-frame must not claim complete_frame");
+    CHECK(r.value.frameIncomplete, "frame_incomplete surfaced");
+    CHECK_EQ(100u, r.value.rasterLine, "raster_line tells where new content stops");
     TEST_END();
 }
 
@@ -2530,6 +2560,7 @@ int main()
     // Stage 6.27 — Beam / raster / screen-snapshot
     test_get_beam_state();
     test_get_screen_snapshot_png();
+    test_screen_snapshot_partial_frame();
     test_screen_snapshot_empty_fails();
     test_get_raster_events();
 

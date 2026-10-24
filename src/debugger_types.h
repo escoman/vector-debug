@@ -202,6 +202,14 @@ struct BeamState
 
     bool running = false;          // emulator was running at snapshot time
     bool available = false;        // target exposes beam state at all
+
+    // True while the video path has not finished a full pass over the frame
+    // (PixelFiller::brk still false since the last filler.reset()). A
+    // breakpoint, watchpoint or step that stops the CPU inside a frame leaves
+    // the TV framebuffer holding this frame above the beam and the previous
+    // frame below it — a partial picture, not a complete one. Consumers must
+    // never equate "paused" with "complete frame".
+    bool frameIncomplete = false;
 };
 
 // ---------------------------------------------------------------------------

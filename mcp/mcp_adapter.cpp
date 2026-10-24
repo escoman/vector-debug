@@ -2061,6 +2061,9 @@ void McpServer::registerRasterTools() {
                 "raster_line, v_cycle), the CPU instruction executing beside the "
                 "beam, and the palette entry the video path is currently shifting "
                 "out. Essential for debugging racing-the-beam / raster effects. "
+                "frame_incomplete mirrors the video path: true while the current "
+                "frame has not reached its end-of-frame point, so a stop there "
+                "leaves the framebuffer half new / half previous. "
                 "Does NOT pause or re-render the emulation.")
             .build();
         registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
@@ -2078,8 +2081,13 @@ void McpServer::registerRasterTools() {
                 "TV framebuffer and return it as a PNG image plus JSON metadata "
                 "(frame id, dimensions, source). This is the composed output — "
                 "NOT a reconstruction from VRAM — so it reveals mid-frame "
-                "raster/palette effects that a VRAM read alone cannot. Does NOT "
-                "pause or re-render the emulation.")
+                "raster/palette effects that a VRAM read alone cannot. Check "
+                "complete_frame (equivalently frame_incomplete + raster_line) "
+                "before treating the image as one whole frame: a breakpoint hit "
+                "inside a frame yields lines above the beam from this frame and "
+                "lines below it from the previous one. For a guaranteed-complete "
+                "picture, break on the first address after INT handling (raster "
+                "in blanking). Does NOT pause or re-render the emulation.")
             .build();
         registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
             auto r = api_.getScreenSnapshot();

@@ -27,6 +27,9 @@
 #include <string>
 #include <chrono>
 #include <thread>
+#include <atomic>
+#include <condition_variable>
+#include <vector>
 
 #include "memory.h"
 #include "i8080.h"
@@ -4176,6 +4179,144 @@ static void test_s42_screen_snapshot_no_board()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.27 regression (BUG_vdbg_screen_snapshot §2): a screen read must
+// never tear across a concurrent raster write.
+//
+// TearingTarget plays the raster: executeFrame() fills its "framebuffer" in
+// two halves and blocks in between, so a reader that ignores screenMutex_ is
+// guaranteed to observe a half-new / half-old buffer. The backend now holds
+// screenMutex_ for the whole target call and reads with try_lock, which makes
+// the mid-write reader serve the previous tear-free frame instead.
+// ---------------------------------------------------------------------------
+
+class TearingTarget : public NoBoardTarget
+{
+public:
+    static constexpr int kPixels = 64;
+
+    explicit TearingTarget(Memory &mem) : NoBoardTarget(mem)
+    {
+        buf_.assign(kPixels, 0);
+    }
+
+    ScreenData screenSnapshot() override
+    {
+        ScreenData d;
+        d.width  = kPixels;
+        d.height = 1;
+        d.pixels = buf_;
+        return d;
+    }
+
+    void executeFrame() override
+    {
+        const uint32_t gen = ++generation_;
+        for (int i = 0; i < kPixels / 2; ++i) buf_[i] = gen;   // top half drawn
+
+        std::unique_lock<std::mutex> lk(mutex_);
+        if (armed_) {
+            armed_ = false;
+            midway_ = true;
+            cv_.notify_all();
+            cv_.wait(lk, [this] { return released_; });   // hold the frame open
+        }
+        lk.unlock();
+
+        for (int i = kPixels / 2; i < kPixels; ++i) buf_[i] = gen;  // bottom half
+    }
+
+    // -- test-thread side ----------------------------------------------------
+
+    void armMidwayHold()
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        armed_   = true;
+        midway_  = false;
+        released_ = false;
+    }
+
+    bool waitMidway(int ms)
+    {
+        std::unique_lock<std::mutex> lk(mutex_);
+        return cv_.wait_for(lk, std::chrono::milliseconds(ms),
+                            [this] { return midway_; });
+    }
+
+    void release()
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+    uint32_t generation() const { return generation_.load(); }
+
+private:
+    std::vector<uint32_t>  buf_;
+    std::atomic<uint32_t>  generation_{0};
+    std::mutex             mutex_;
+    std::condition_variable cv_;
+    bool                   armed_    = false;
+    bool                   midway_   = false;
+    bool                   released_ = false;
+};
+
+static bool allPixelsEqual(const std::vector<uint32_t> &px)
+{
+    if (px.empty()) return false;
+    for (uint32_t p : px) {
+        if (p != px.front()) return false;
+    }
+    return true;
+}
+
+static void test_s627_screen_snapshot_never_tears()
+{
+    TEST_BEGIN("S6.27: screenSnapshot() never returns a half-written frame");
+
+    Memory mem;
+    TearingTarget target(mem);
+    DebugBackend dbg(target);
+    dbg.testSynchronous_ = true;
+    load_test_rom(mem);
+    dbg.reset();
+
+    // Baseline read while paused — fills the backend's tear-free cache.
+    auto base = dbg.screenSnapshot();
+    CHECK_EQ((unsigned)TearingTarget::kPixels, (unsigned)base.pixels.size(),
+             "baseline snapshot has pixels");
+    CHECK(allPixelsEqual(base.pixels), "baseline frame is uniform");
+
+    dbg.requestRun();
+    target.armMidwayHold();
+    std::thread th([&]() { dbg.runUntilPause(); });
+
+    CHECK(target.waitMidway(3000),
+          "emulation thread is inside executeFrame with a half-drawn frame");
+
+    // The raster is stopped halfway through the buffer. Reading now must not
+    // see the mixture: it gets the cached complete frame instead.
+    auto during = dbg.screenSnapshot();
+    target.release();   // never leave the emulation thread blocked
+
+    CHECK(allPixelsEqual(during.pixels), "mid-write read is not a torn frame");
+    CHECK_EQ(during.pixels.front(), base.pixels.front(),
+             "mid-write read serves the previous complete frame");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    dbg.requestPause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    dbg.requestQuit();
+    th.join();
+
+    CHECK(target.generation() > 0, "at least one frame was executed");
+    auto after = dbg.screenSnapshot();
+    CHECK(allPixelsEqual(after.pixels), "read after the frame loop is uniform");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Stage 5 — Run/Pause synchronization tests (atomic running_ flag)
 //
 // Tests use runUntilPause() in a separate thread to exercise the real
@@ -4809,6 +4950,7 @@ int main()
     test_s42_activity_read_write_counters();
     test_s42_activity_reset_clears();
     test_s42_screen_snapshot_no_board();
+    test_s627_screen_snapshot_never_tears();
 
     // Stage 5 — Run/Pause synchronization tests
     test_run_pause_atomic_flag();

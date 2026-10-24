@@ -128,7 +128,13 @@ struct AgentScreenSnapshot
 
     // -- Stage 6.27: raster/beam PNG snapshot metadata ----------------------
     uint64_t    frame         = 0;      // frame number the image was captured on
-    bool        completeFrame = false;  // image is a whole completed frame
+    // True only when the image is a whole completed frame. A breakpoint that
+    // stops the CPU mid-frame leaves the lower lines of the TV buffer holding
+    // the PREVIOUS frame — that picture is completeFrame == false, with
+    // rasterLine telling where the new content stops.
+    bool        completeFrame = false;
+    uint32_t    rasterLine    = 0;      // beam raster line at capture time
+    bool        frameIncomplete = false; // video path has not finished this frame
     std::string format        = "RGB";  // pixel format of the encoded image
     std::string source        = "tv";   // real TV buffer ("tv"), never "vram"
     std::string paletteMode   = "raster";
@@ -169,6 +175,12 @@ struct AgentBeamState
     int      paletteIndex = -1;
     uint8_t  paletteValue = 0;
     int      borderIndex = -1;
+
+    // Video-path truth about the frame (BeamState::frameIncomplete): the beam
+    // has not finished a full pass since the last raster reset, so lines below
+    // rasterLine still show the previous frame. Paused + frameIncomplete means
+    // the picture is a partial frame, not a complete one.
+    bool     frameIncomplete = false;
 };
 
 // ---------------------------------------------------------------------------

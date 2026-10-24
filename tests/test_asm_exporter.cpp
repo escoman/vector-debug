@@ -8,6 +8,7 @@
 
 #include "asm_exporter.h"
 #include "rdb_controller.h"
+#include "test_tmp_dir.h"
 
 #include <cassert>
 #include <cctype>
@@ -53,7 +54,7 @@ static int testsFailed = 0;
 static std::string writeTempFile(const std::string &name,
                                   const uint8_t *data, size_t size)
 {
-    std::string path = "/tmp/test_asm_export_" + name;
+    std::string path = testTmpPath("test_asm_export_" + name);
     std::ofstream f(path, std::ios::binary);
     f.write(reinterpret_cast<const char *>(data), size);
     f.close();
@@ -62,7 +63,20 @@ static std::string writeTempFile(const std::string &name,
 
 static void cleanupTempFiles()
 {
-    system("rm -rf /tmp/test_asm_export_*");
+    // Portable: std::filesystem sweep of test_asm_export_* in the temp dir
+    // (system("rm -rf <glob>") is not available on Windows).
+    std::error_code ec;
+    std::vector<std::string> targets;
+    for (const auto &entry :
+         std::filesystem::directory_iterator(testTmpRoot(),
+                                             std::filesystem::directory_options::skip_permission_denied,
+                                             ec)) {
+        std::string fn = entry.path().filename().string();
+        if (fn.rfind("test_asm_export_", 0) == 0) {
+            targets.push_back(entry.path().string());
+        }
+    }
+    for (const auto &t : targets) testRemoveTree(t);
 }
 
 static std::string readWholeFile(const std::string &path)
@@ -277,14 +291,14 @@ TEST_BEGIN(export_hex_literals_buildable)
     std::string romPath = writeTempFile("buildable.rom", rom.data(), rom.size());
     AsmExportConfig config;
     config.romPath = romPath;
-    config.outputDir = "/tmp/test_asm_export_buildable";
+    config.outputDir = testTmpPath("test_asm_export_buildable");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
     AsmExportReport report = exporter.run();
     CHECK(!report.hasErrors(), "buildable export succeeds");
 
-    std::ifstream cf("/tmp/test_asm_export_buildable/code/code.asm");
+    std::ifstream cf(testTmpPath("test_asm_export_buildable/code/code.asm"));
     CHECK(cf.is_open(), "code.asm readable");
     std::string content((std::istreambuf_iterator<char>(cf)),
                          std::istreambuf_iterator<char>());
@@ -384,14 +398,14 @@ TEST_BEGIN(export_unassigned_opcodes)
     std::string romPath = writeTempFile("unassigned.rom", rom.data(), rom.size());
     AsmExportConfig config;
     config.romPath = romPath;
-    config.outputDir = "/tmp/test_asm_export_unassigned";
+    config.outputDir = testTmpPath("test_asm_export_unassigned");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
     AsmExportReport report = exporter.run();
     CHECK(!report.hasErrors(), "unassigned-opcode export succeeds");
 
-    std::string layout = readWholeFile("/tmp/test_asm_export_unassigned/layout.asm");
+    std::string layout = readWholeFile(testTmpPath("test_asm_export_unassigned/layout.asm"));
     CHECK(!layout.empty(), "layout.asm readable");
 
     auto countOccurrences = [](const std::string &hay, const std::string &needle) {
@@ -470,7 +484,7 @@ TEST_BEGIN(full_export_synthetic)
 
     AsmExportConfig config;
     config.romPath = romPath;
-    config.outputDir = "/tmp/test_asm_export_output";
+    config.outputDir = testTmpPath("test_asm_export_output");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
@@ -498,7 +512,7 @@ TEST_BEGIN(full_export_synthetic)
 
     // Verify export.json content
     {
-        std::ifstream jf("/tmp/test_asm_export_output/export.json");
+        std::ifstream jf(testTmpPath("test_asm_export_output/export.json"));
         CHECK(jf.is_open(), "export.json readable");
         std::string content((std::istreambuf_iterator<char>(jf)),
                              std::istreambuf_iterator<char>());
@@ -510,7 +524,7 @@ TEST_BEGIN(full_export_synthetic)
 
     // Verify main.asm content
     {
-        std::ifstream af("/tmp/test_asm_export_output/main.asm");
+        std::ifstream af(testTmpPath("test_asm_export_output/main.asm"));
         CHECK(af.is_open(), "main.asm readable");
         std::string content((std::istreambuf_iterator<char>(af)),
                              std::istreambuf_iterator<char>());
@@ -522,7 +536,7 @@ TEST_BEGIN(full_export_synthetic)
 
     // Verify code.asm has instructions
     {
-        std::ifstream cf("/tmp/test_asm_export_output/code/code.asm");
+        std::ifstream cf(testTmpPath("test_asm_export_output/code/code.asm"));
         CHECK(cf.is_open(), "code.asm readable");
         std::string content((std::istreambuf_iterator<char>(cf)),
                              std::istreambuf_iterator<char>());
@@ -586,13 +600,13 @@ TEST_BEGIN(export_with_rdb)
     std::string rdbContent;
     {
         // Serialize RDB to JSON manually — use saveAs
-        std::string rdbPath = "/tmp/test_asm_export_rdb_test.rdb";
+        std::string rdbPath = testTmpPath("test_asm_export_rdb_test.rdb");
         rdb.saveAs(rdbPath);
 
         AsmExportConfig config;
         config.romPath = romPath;
         config.rdbPath = rdbPath;
-        config.outputDir = "/tmp/test_asm_export_rdb_output";
+        config.outputDir = testTmpPath("test_asm_export_rdb_output");
         config.origin = 0x0000;
 
         AsmExporter exporter(config);
@@ -604,7 +618,7 @@ TEST_BEGIN(export_with_rdb)
 
         // Verify code.asm has the function label
         {
-            std::ifstream cf("/tmp/test_asm_export_rdb_output/code/code.asm");
+            std::ifstream cf(testTmpPath("test_asm_export_rdb_output/code/code.asm"));
             std::string content((std::istreambuf_iterator<char>(cf)),
                                  std::istreambuf_iterator<char>());
             CHECK(content.find("my_func:") != std::string::npos,
@@ -615,7 +629,7 @@ TEST_BEGIN(export_with_rdb)
 
         // Verify data.asm has the data block
         {
-            std::ifstream df("/tmp/test_asm_export_rdb_output/data/data.asm");
+            std::ifstream df(testTmpPath("test_asm_export_rdb_output/data/data.asm"));
             std::string content((std::istreambuf_iterator<char>(df)),
                                  std::istreambuf_iterator<char>());
             CHECK(content.find("my_data:") != std::string::npos,
@@ -652,12 +666,12 @@ TEST_BEGIN(deterministic_export)
     // Export twice
     AsmExportConfig config;
     config.romPath = romPath;
-    config.outputDir = "/tmp/test_asm_export_det1";
+    config.outputDir = testTmpPath("test_asm_export_det1");
     config.origin = 0x0000;
 
     AsmExporter(config).run();
 
-    config.outputDir = "/tmp/test_asm_export_det2";
+    config.outputDir = testTmpPath("test_asm_export_det2");
     AsmExporter(config).run();
 
     // Compare generated files
@@ -667,12 +681,12 @@ TEST_BEGIN(deterministic_export)
                             std::istreambuf_iterator<char>());
     };
 
-    std::string code1 = readFile("/tmp/test_asm_export_det1/code/code.asm");
-    std::string code2 = readFile("/tmp/test_asm_export_det2/code/code.asm");
+    std::string code1 = readFile(testTmpPath("test_asm_export_det1/code/code.asm"));
+    std::string code2 = readFile(testTmpPath("test_asm_export_det2/code/code.asm"));
     CHECK(code1 == code2, "code.asm is deterministic");
 
-    std::string main1 = readFile("/tmp/test_asm_export_det1/main.asm");
-    std::string main2 = readFile("/tmp/test_asm_export_det2/main.asm");
+    std::string main1 = readFile(testTmpPath("test_asm_export_det1/main.asm"));
+    std::string main2 = readFile(testTmpPath("test_asm_export_det2/main.asm"));
     CHECK(main1 == main2, "main.asm is deterministic");
 
     cleanupTempFiles();
@@ -692,7 +706,7 @@ TEST_BEGIN(export_without_rdb)
 
     AsmExportConfig config;
     config.romPath = romPath;
-    config.outputDir = "/tmp/test_asm_export_nordb";
+    config.outputDir = testTmpPath("test_asm_export_nordb");
     config.origin = 0x0000;
     // No RDB path
 
@@ -704,7 +718,7 @@ TEST_BEGIN(export_without_rdb)
 
     // data.asm should mention "No RDB available"
     {
-        std::ifstream df("/tmp/test_asm_export_nordb/data/data.asm");
+        std::ifstream df(testTmpPath("test_asm_export_nordb/data/data.asm"));
         std::string content((std::istreambuf_iterator<char>(df)),
                              std::istreambuf_iterator<char>());
         CHECK(content.find("No RDB") != std::string::npos,
@@ -722,8 +736,8 @@ TEST_END()
 TEST_BEGIN(rom_not_found)
 {
     AsmExportConfig config;
-    config.romPath = "/tmp/nonexistent_rom_file.rom";
-    config.outputDir = "/tmp/test_asm_export_err";
+    config.romPath = testTmpPath("nonexistent_rom_file.rom");
+    config.outputDir = testTmpPath("test_asm_export_err");
 
     AsmExporter exporter(config);
     AsmExportReport report = exporter.run();
@@ -771,13 +785,13 @@ TEST_BEGIN(layout_stream_and_coverage)
     data.hasSize = true;
     data.comment = "Interleaved data block";
     rdb.addObject(data);
-    std::string rdbPath = "/tmp/test_asm_export_layout.rdb";
+    std::string rdbPath = testTmpPath("test_asm_export_layout.rdb");
     rdb.saveAs(rdbPath);
 
     AsmExportConfig config;
     config.romPath = romPath;
     config.rdbPath = rdbPath;
-    config.outputDir = "/tmp/test_asm_export_layout";
+    config.outputDir = testTmpPath("test_asm_export_layout");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
@@ -803,7 +817,7 @@ TEST_BEGIN(layout_stream_and_coverage)
     CHECK(gapWarned, "uncovered byte raised a warning (2.3)");
 
     // --- layout.asm content and ordering ----------------------------------
-    std::ifstream lf("/tmp/test_asm_export_layout/layout.asm");
+    std::ifstream lf(testTmpPath("test_asm_export_layout/layout.asm"));
     CHECK(lf.is_open(), "layout.asm generated");
     std::string layout((std::istreambuf_iterator<char>(lf)),
                         std::istreambuf_iterator<char>());
@@ -824,7 +838,7 @@ TEST_BEGIN(layout_stream_and_coverage)
           "layout: RDB comment carried over");
 
     // --- main.asm builds the layout, not the two views --------------------
-    std::ifstream mf("/tmp/test_asm_export_layout/main.asm");
+    std::ifstream mf(testTmpPath("test_asm_export_layout/main.asm"));
     std::string mainAsm((std::istreambuf_iterator<char>(mf)),
                          std::istreambuf_iterator<char>());
     CHECK(mainAsm.find("include\t\"layout.asm\"") != std::string::npos,
@@ -834,7 +848,7 @@ TEST_BEGIN(layout_stream_and_coverage)
           "main.asm does not build the views (they stay commented)");
 
     // --- export.json carries coverage -------------------------------------
-    std::ifstream jf("/tmp/test_asm_export_layout/export.json");
+    std::ifstream jf(testTmpPath("test_asm_export_layout/export.json"));
     std::string json((std::istreambuf_iterator<char>(jf)),
                      std::istreambuf_iterator<char>());
     CHECK(json.find("\"coverage\"") != std::string::npos, "json: coverage block");
@@ -866,7 +880,7 @@ TEST_BEGIN(clipping_outside_window)
 
     AsmExportConfig config;
     config.romPath = romPath;
-    config.outputDir = "/tmp/test_asm_export_clip";
+    config.outputDir = testTmpPath("test_asm_export_clip");
     config.origin = 0x0100;
 
     AsmExporter exporter(config);

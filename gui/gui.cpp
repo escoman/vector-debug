@@ -26,6 +26,54 @@
 #include <sys/stat.h>   // mkdir() for the "Install .desktop" action
 
 // ---------------------------------------------------------------------------
+// Portable single-directory create.
+// POSIX mkdir() takes a mode; MinGW's mkdir() (from io.h) takes only a path.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+#include <direct.h>
+static int makeDir(const char* path) { return _mkdir(path); }
+#else
+static int makeDir(const char* path) { return mkdir(path, 0755); }
+#endif
+
+// ---------------------------------------------------------------------------
+// Resolve the bundled monospaced Unicode font.
+// DejaVuSansMono is needed for the Cyrillic keyboard legends (ВВОД, БЛК, ...)
+// which ImGui's built-in font lacks. The asset lives in the repo under
+// res/fonts/ and is seeded next to the executable (build dir / release bundle),
+// so SDL_GetBasePath() finds it without any system-font lookup. Well-known
+// system paths remain as a fallback for source trees run without the copy.
+// Returns "" when nothing is found so the caller can skip loading (avoiding
+// ImGui's "Could not load font file!" assertion).
+// ---------------------------------------------------------------------------
+static std::string resolveMonoFont()
+{
+    std::string nextToExe;
+    if (const char* base = SDL_GetBasePath()) {
+        nextToExe = std::string(base) + "fonts/DejaVuSansMono.ttf";
+        SDL_free(const_cast<char*>(base));
+    }
+
+    const char* candidates[] = {
+        nextToExe.empty() ? nullptr : nextToExe.c_str(),
+        "fonts/DejaVuSansMono.ttf",              // relative to CWD
+#ifdef _WIN32
+        "C:\\Windows\\Fonts\\DejaVuSansMono.ttf",
+#else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+#endif
+    };
+
+    for (const char* p : candidates) {
+        if (p && *p) {
+            if (FILE* f = fopen(p, "rb")) { fclose(f); return p; }
+        }
+    }
+    return std::string();
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -86,13 +134,15 @@ bool DebuggerGui::initialize(int width, int height)
     // Style
     ImGui::StyleColorsDark();
 
-    // Load monospaced font with Unicode support for button icons
-    io.Fonts->AddFontFromFileTTF(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 15.0f);
-
-    // Small monospaced font for long keyboard legends (ВВОД, БЛК, etc.)
-    KeyboardWindow::sSmallFont = io.Fonts->AddFontFromFileTTF(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 11.0f);
+    // Load monospaced font with Unicode support for button icons and the
+    // Cyrillic keyboard legends (ВВОД, БЛК, ...). Falls back to ImGui's
+    // built-in font when no file is found (no crash, just no Cyrillic).
+    const std::string monoFont = resolveMonoFont();
+    if (!monoFont.empty()) {
+        io.Fonts->AddFontFromFileTTF(monoFont.c_str(), 15.0f);
+        // Small monospaced font for long keyboard legends.
+        KeyboardWindow::sSmallFont = io.Fonts->AddFontFromFileTTF(monoFont.c_str(), 11.0f);
+    }
 
     // Backend init
     ImGui_ImplSDL2_InitForOpenGL(window_, glContext_);
@@ -1197,9 +1247,9 @@ void DebuggerGui::installDesktopFile()
     // Create ~/.local/share/applications (mkdir -p semantics; EEXIST ignored).
     for (size_t i = 1; i < dir.size(); ++i) {
         if (dir[i] == '/')
-            mkdir(dir.substr(0, i).c_str(), 0755);
+            makeDir(dir.substr(0, i).c_str());
     }
-    mkdir(dir.c_str(), 0755);
+    makeDir(dir.c_str());
 
     // Write (create or replace) the destination file.
     if (FILE *g = fopen(dest.c_str(), "wb")) {

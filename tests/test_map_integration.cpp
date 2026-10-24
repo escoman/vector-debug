@@ -17,6 +17,7 @@
 #include "backend.h"
 #include "map_loader.h"
 #include "symbol_database.h"
+#include "test_tmp_dir.h"
 
 using namespace i8080cpu;
 
@@ -118,7 +119,7 @@ static int tests_failed = 0;
 
 static std::string write_temp_file(const std::string &name, const std::string &content)
 {
-    std::string path = "/tmp/" + name;
+    std::string path = testTmpPath(name);
     std::ofstream f(path, std::ios::binary);
     f.write(content.data(), content.size());
     return path;

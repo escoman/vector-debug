@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(vector-debugger)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -g -pthread")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -g")
 
 # Debugger-only additions in the shared emulator sources (../src) are wrapped in
 # #ifdef V06C_DEBUGGER. Define it here so the debugger build sees peek(),
@@ -37,12 +37,48 @@ include_directories(${ROOT_DIR}/fast-filters/sources)  # coredsp for resampler
 include_directories(${ROOT_DIR}/coreutil/sources)       # coreutil for coredsp
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)  # stb_image.h, nlohmann/json
 include_directories(${DBG_RDB_DIR})                          # RDB module (Stage 6.11)
+include_directories(${DBG_TST_DIR})                          # shared test helpers (test_tmp_dir.h)
 
 # ---------------------------------------------------------------------------
 # Find Boost (required for Board sources)
 # ---------------------------------------------------------------------------
 
+if(WIN32)
+    # MSYS2 mingw-w64-boost ships static .a libs by default.
+    set(Boost_USE_STATIC_LIBS ON)
+endif()
 find_package(Boost REQUIRED COMPONENTS program_options system thread chrono filesystem)
+
+# ---------------------------------------------------------------------------
+# Threads (portable replacement for the bare `pthread` link dependency).
+# On MinGW/MSYS2 this resolves to winpthread; on Linux to pthread.
+# ---------------------------------------------------------------------------
+
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
+# ---------------------------------------------------------------------------
+# Windows file icon
+#
+# On Windows the per-file icon shown in Explorer/taskbar is an embedded
+# RT_GROUP_ICON resource, not a runtime SDL call. res/icon.ico (a tracked asset
+# generated from res/icon64.png by scripts/make_icon.ps1) is compiled into each
+# v06c-* executable via a generated app.rc. MinGW's windres handles the .rc once
+# RC is enabled. The .rc is configured with an absolute icon path so windres is
+# independent of the build CWD. Empty on Linux (icon there comes from .desktop).
+# ---------------------------------------------------------------------------
+
+set(VDB_WIN_ICON_RC "")
+if(WIN32)
+    enable_language(RC)
+    set(VDB_ICON_ABS "${CMAKE_CURRENT_SOURCE_DIR}/res/icon.ico")
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/res/app.rc.in
+        ${CMAKE_CURRENT_BINARY_DIR}/app.rc
+        @ONLY
+    )
+    set(VDB_WIN_ICON_RC ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
+endif()
 
 # ---------------------------------------------------------------------------
 # Sources
@@ -110,10 +146,36 @@ set(BOARD_TEST_SOURCES
 
 # ---------------------------------------------------------------------------
 # Find SDL2 (required for Board sources)
+#
+# On Linux the vendor (v06c-emu) FindSDL2 module resolves Linux paths.
+# On MSYS2/MinGW that module looks in /usr/lib and fails, so we use
+# pkg-config, which the mingw-w64 SDL2 package provides (sdl2.pc).
 # ---------------------------------------------------------------------------
 
-set(CMAKE_MODULE_PATH ${ROOT_DIR}/cmake)
-find_package(SDL2 REQUIRED)
+if(WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED sdl2)
+    # Normalise to the SDL2_LIBRARY / SDL2_INCLUDE_DIR names used below.
+    set(SDL2_LIBRARY ${SDL2_LDFLAGS})
+    set(SDL2_INCLUDE_DIR ${SDL2_INCLUDE_DIRS})
+    # Headless test executables keep a plain main(); the mingw SDL2main shim
+    # rewrites the entry point (main -> SDL_main) and then demands an SDL_main
+    # symbol the tests never provide. Strip SDL2main (and its -lmingw32 helper)
+    # for test targets — they still link the SDL2 runtime symbols they use.
+    # pkg-config also emits -mwindows (GUI subsystem -> WinMain entry), which
+    # would force the tests away from their console main(); drop that too so
+    # they link as normal console apps whose stdout is visible to the runner.
+    # The GUI app (v06c-debugger) includes SDL.h, so its main IS renamed to
+    # SDL_main and it must keep the full SDL2_LIBRARY (with SDL2main/-mwindows).
+    string(REPLACE "-lSDL2main" "" SDL2_LIB_ONLY "${SDL2_LIBRARY}")
+    string(REPLACE "-lmingw32"  "" SDL2_LIB_ONLY "${SDL2_LIB_ONLY}")
+    string(REPLACE "-mwindows"  "" SDL2_LIB_ONLY "${SDL2_LIB_ONLY}")
+else()
+    set(CMAKE_MODULE_PATH ${ROOT_DIR}/cmake)
+    find_package(SDL2 REQUIRED)
+    # Linux has no SDL2main entry shim; one library serves both app and tests.
+    set(SDL2_LIB_ONLY ${SDL2_LIBRARY})
+endif()
 
 # ---------------------------------------------------------------------------
 # Test executable
@@ -210,7 +272,7 @@ target_include_directories(test_map_integration PRIVATE
 
 target_link_libraries(test_map_integration
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -235,7 +297,7 @@ target_include_directories(test_runtime_accounting PRIVATE
 
 target_link_libraries(test_runtime_accounting
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -252,9 +314,17 @@ add_executable(test_board_smoke
 )
 
 target_link_libraries(test_board_smoke
-    ${SDL2_LIBRARY}
+    ${SDL2_LIB_ONLY}
     ${Boost_LIBRARIES}
 )
+
+# The board headers (tv.h/sound.h/...) pull SDL.h, whose SDL_main.h rewrites
+# main -> SDL_main on Windows. This is a headless console test with a plain
+# main(), so opt out of the SDL entry-point rewrite (pairs with SDL2_LIB_ONLY
+# dropping SDL2main/-mwindows above). Harmless/no-op on Linux.
+if(WIN32)
+    target_compile_definitions(test_board_smoke PRIVATE SDL_MAIN_HANDLED)
+endif()
 
 # ---------------------------------------------------------------------------
 # ROM load address unit test (Stage: Pipeline — correct ROM loading)
@@ -287,7 +357,7 @@ target_include_directories(test_rom_loading PRIVATE
 
 target_link_libraries(test_rom_loading
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -309,7 +379,7 @@ target_include_directories(test_reset_cpu_state PRIVATE
 
 target_link_libraries(test_reset_cpu_state
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -413,7 +483,7 @@ target_include_directories(debugger_core PUBLIC
 
 target_link_libraries(debugger_core
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -436,9 +506,9 @@ target_include_directories(debugger_adapter PUBLIC
 
 target_link_libraries(debugger_adapter
     debugger_core
-    ${SDL2_LIBRARY}
+    ${SDL2_LIB_ONLY}
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -468,11 +538,16 @@ target_include_directories(test_live_map PRIVATE
 )
 
 target_link_libraries(test_live_map
-    ${SDL2_LIBRARY}
+    ${SDL2_LIB_ONLY}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
+
+# Same SDL_main opt-out as test_board_smoke (headers pull in SDL.h).
+if(WIN32)
+    target_compile_definitions(test_live_map PRIVATE SDL_MAIN_HANDLED)
+endif()
 
 # ---------------------------------------------------------------------------
 # Memory Access filter test executable (Stage 6.25)
@@ -499,11 +574,16 @@ target_include_directories(test_memory_access_filter PRIVATE
 )
 
 target_link_libraries(test_memory_access_filter
-    ${SDL2_LIBRARY}
+    ${SDL2_LIB_ONLY}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
+
+# Same SDL_main opt-out as test_board_smoke (headers pull in SDL.h).
+if(WIN32)
+    target_compile_definitions(test_memory_access_filter PRIVATE SDL_MAIN_HANDLED)
+endif()
 
 # ---------------------------------------------------------------------------
 # Binary resources (boot ROM, window icon)
@@ -511,8 +591,15 @@ target_link_libraries(test_memory_access_filter
 
 find_program(OBJCOPY objcopy)
 
-# Detect output format for objcopy based on platform
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+# Detect output format for objcopy based on platform.
+# On Windows/MinGW the linker expects PE/COFF objects, not ELF. The -B
+# architecture flag is REQUIRED for objcopy to emit a valid PE object
+# (without it the file is malformed and 'ar'/'ld' reject it). This yields
+# _binary_boots_bin_* symbols (leading underscore), matching board.cpp's
+# default (non-MSYS_MINGW32) extern branch. Mirrors vendor/v06c-emu.
+if(WIN32)
+    set(DBG_OBJCOPY_FMT "-O" "pe-x86-64" "-B" "i386:x86-64")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(DBG_OBJCOPY_FMT "-O" "elf64-x86-64")
 else()
     set(DBG_OBJCOPY_FMT "-O" "elf32-i386")
@@ -559,6 +646,17 @@ if(WORKSPACE_PRESET_SEEDS)
 endif()
 
 # ---------------------------------------------------------------------------
+# Bundled font assets (res/fonts/) — seeded next to the executable so the GUI
+# loads DejaVuSansMono.ttf via SDL_GetBasePath() on every platform. Always
+# overwritten to stay in sync with the tracked source asset.
+# ---------------------------------------------------------------------------
+file(GLOB FONT_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/res/fonts/*.ttf)
+if(FONT_ASSETS)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fonts)
+    file(COPY ${FONT_ASSETS} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/fonts)
+endif()
+
+# ---------------------------------------------------------------------------
 # Sound Window test executable
 #
 # Part A: pure SoundWindow::analyzeSnapshot / channel-order tests (ImGui
@@ -588,16 +686,27 @@ target_include_directories(test_sound_window PRIVATE
 target_link_libraries(test_sound_window
     debugger_adapter
     debugger_core
-    ${SDL2_LIBRARY}
+    ${SDL2_LIB_ONLY}
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
+# Same SDL_main opt-out as test_board_smoke (headers pull in SDL.h).
+if(WIN32)
+    target_compile_definitions(test_sound_window PRIVATE SDL_MAIN_HANDLED)
+endif()
+
 # Binary resources produce absolute symbols — disable PIE
-set_target_properties(test_sound_window PROPERTIES
-    LINK_FLAGS "-no-pie"
-    POSITION_INDEPENDENT_CODE OFF
-)
+if(NOT WIN32)
+    set_target_properties(test_sound_window PROPERTIES
+        LINK_FLAGS "-no-pie"
+        POSITION_INDEPENDENT_CODE OFF
+    )
+else()
+    set_target_properties(test_sound_window PROPERTIES
+        POSITION_INDEPENDENT_CODE OFF
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Audio grab -> MIDI export test (Stage 6.28)
@@ -621,16 +730,27 @@ target_include_directories(test_audio_midi PRIVATE
 target_link_libraries(test_audio_midi
     debugger_adapter
     debugger_core
-    ${SDL2_LIBRARY}
+    ${SDL2_LIB_ONLY}
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
+# Same SDL_main opt-out as test_board_smoke (console test, plain main()).
+if(WIN32)
+    target_compile_definitions(test_audio_midi PRIVATE SDL_MAIN_HANDLED)
+endif()
+
 # Binary resources produce absolute symbols — disable PIE
-set_target_properties(test_audio_midi PROPERTIES
-    LINK_FLAGS "-no-pie"
-    POSITION_INDEPENDENT_CODE OFF
-)
+if(NOT WIN32)
+    set_target_properties(test_audio_midi PROPERTIES
+        LINK_FLAGS "-no-pie"
+        POSITION_INDEPENDENT_CODE OFF
+    )
+else()
+    set_target_properties(test_audio_midi PROPERTIES
+        POSITION_INDEPENDENT_CODE OFF
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # AI Agent Module (Stage 5.3) — optional, off by default
@@ -654,7 +774,7 @@ if(ENABLE_AI_AGENT)
 
     target_link_libraries(debugger_agent
         debugger_core
-        pthread
+        Threads::Threads
     )
 
     # Agent API tests (use mock backend — no Board/SDL dependency)
@@ -672,7 +792,7 @@ if(ENABLE_AI_AGENT)
         debugger_agent
         debugger_core
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # Agent command protocol tests (Stage 5.3.1 — 15 mandatory tests)
@@ -690,7 +810,7 @@ if(ENABLE_AI_AGENT)
         debugger_agent
         debugger_core
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # Mock Agent scenario test (uses real DebugBackend + DebugAdapter)
@@ -711,16 +831,27 @@ if(ENABLE_AI_AGENT)
     target_link_libraries(test_agent_mock
         debugger_adapter
         debugger_core
-        ${SDL2_LIBRARY}
+        ${SDL2_LIB_ONLY}
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
+    # Same SDL_main opt-out as test_board_smoke (console test, plain main()).
+    if(WIN32)
+        target_compile_definitions(test_agent_mock PRIVATE SDL_MAIN_HANDLED)
+    endif()
+
     # Binary resources produce absolute symbols — disable PIE
-    set_target_properties(test_agent_mock PROPERTIES
-        LINK_FLAGS "-no-pie"
-        POSITION_INDEPENDENT_CODE OFF
-    )
+    if(NOT WIN32)
+        set_target_properties(test_agent_mock PROPERTIES
+            LINK_FLAGS "-no-pie"
+            POSITION_INDEPENDENT_CODE OFF
+        )
+    else()
+        set_target_properties(test_agent_mock PROPERTIES
+            POSITION_INDEPENDENT_CODE OFF
+        )
+    endif()
 
     # Agent integration tests (Stage 5.3.2 — 20 mandatory tests)
     # Uses real DebugBackend + NoBoardTarget — needs CORE_SOURCES + options.
@@ -741,7 +872,7 @@ if(ENABLE_AI_AGENT)
     target_link_libraries(test_agent_integration
         debugger_agent
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # Agent API contract tests (Stage 6.3 — verify public API contract)
@@ -759,7 +890,7 @@ if(ENABLE_AI_AGENT)
         debugger_agent
         debugger_core
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # Agent Runtime Memory Analysis tests (Stage 6.20)
@@ -777,7 +908,7 @@ if(ENABLE_AI_AGENT)
         debugger_agent
         debugger_core
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # ROM Load Breakpoint Reset tests (Stage 6.20.1)
@@ -799,7 +930,7 @@ if(ENABLE_AI_AGENT)
     target_link_libraries(test_agent_rom_load_breakpoints
         debugger_agent
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # RDB Save Symbol Sync tests (Stage 6.20.2)
@@ -821,7 +952,7 @@ target_include_directories(test_agent_rdb_save_sync PRIVATE
 target_link_libraries(test_agent_rdb_save_sync
         debugger_agent
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # -----------------------------------------------------------------------
@@ -851,7 +982,14 @@ target_link_libraries(test_agent_rdb_save_sync
         MCP_SESSION_TIMEOUT=30
     )
 
-    target_link_libraries(cpp_mcp PUBLIC pthread)
+    target_link_libraries(cpp_mcp PUBLIC Threads::Threads)
+    
+        # cpp-httplib uses Winsock on Windows; link ws2_32 (and crypt32, which
+        # httplib pulls in for its HTTPS/SSL code paths) through the public
+        # interface so every consumer (v06c-mcp, tests) inherits them.
+        if(WIN32)
+            target_link_libraries(cpp_mcp PUBLIC ws2_32 crypt32)
+        endif()
 
     # debugger_mcp — MCP adapter library
     add_library(debugger_mcp STATIC
@@ -872,7 +1010,7 @@ target_link_libraries(test_agent_rdb_save_sync
         debugger_agent
         debugger_core
         cpp_mcp
-        pthread
+        Threads::Threads
     )
 
     # v06c-mcp — MCP executable (headless, stdio transport)
@@ -924,6 +1062,7 @@ target_link_libraries(test_agent_rdb_save_sync
     add_executable(v06c-mcp
         ${MCP_DIR}/mcp_main.cpp
         ${BINARY_RESOURCES}
+        ${VDB_WIN_ICON_RC}
     )
 
     # Stamp the MCP TU pair: mcp_main.cpp (executable banner) and
@@ -960,15 +1099,21 @@ target_link_libraries(test_agent_rdb_save_sync
         cpp_mcp
         ${SDL2_LIBRARY}
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 
     # Binary resources produce absolute symbols (_binary_*_size) which cannot
     # be used with position-independent code on x86_64. Disable PIE for this target.
-    set_target_properties(v06c-mcp PROPERTIES
-        LINK_FLAGS "-no-pie"
-        POSITION_INDEPENDENT_CODE OFF
-    )
+    if(NOT WIN32)
+        set_target_properties(v06c-mcp PROPERTIES
+            LINK_FLAGS "-no-pie"
+            POSITION_INDEPENDENT_CODE OFF
+        )
+    else()
+        set_target_properties(v06c-mcp PROPERTIES
+            POSITION_INDEPENDENT_CODE OFF
+        )
+    endif()
 
     # MCP protocol tests (Stage 6.4)
     add_executable(test_mcp_protocol
@@ -991,7 +1136,7 @@ target_link_libraries(test_agent_rdb_save_sync
         debugger_core
         cpp_mcp
         ${Boost_LIBRARIES}
-        pthread
+        Threads::Threads
     )
 endif()
 
@@ -1004,6 +1149,7 @@ set(EXPORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/export)
 add_executable(v06c-asm-export
     ${EXPORT_DIR}/asm_exporter.cpp
     ${EXPORT_DIR}/asm_exporter_main.cpp
+    ${VDB_WIN_ICON_RC}
 )
 
 target_include_directories(v06c-asm-export PRIVATE
@@ -1018,7 +1164,7 @@ target_include_directories(v06c-asm-export PRIVATE
 target_link_libraries(v06c-asm-export
     debugger_core
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ASM Exporter tests (Stage 6.17)
@@ -1039,7 +1185,7 @@ target_include_directories(test_asm_exporter PRIVATE
 target_link_libraries(test_asm_exporter
     debugger_core
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
@@ -1064,7 +1210,7 @@ target_include_directories(test_code_analyzer PRIVATE
 target_link_libraries(test_code_analyzer
     debugger_core
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 include_directories(${SDL2_INCLUDE_DIR})
@@ -1106,6 +1252,7 @@ add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
     ${BINARY_RESOURCES}
+    ${VDB_WIN_ICON_RC}
 )
 
 target_link_libraries(v06c-debugger
@@ -1114,30 +1261,39 @@ target_link_libraries(v06c-debugger
     ${SDL2_LIBRARY}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
-    pthread
+    Threads::Threads
 )
 
 # Binary resources produce absolute symbols (_binary_*_size) which cannot
 # be used with position-independent code on x86_64. Disable PIE for this target.
-set_target_properties(v06c-debugger PROPERTIES
-    LINK_FLAGS "-no-pie"
-    POSITION_INDEPENDENT_CODE OFF
-)
+if(NOT WIN32)
+    set_target_properties(v06c-debugger PROPERTIES
+        LINK_FLAGS "-no-pie"
+        POSITION_INDEPENDENT_CODE OFF
+    )
+else()
+    set_target_properties(v06c-debugger PROPERTIES
+        POSITION_INDEPENDENT_CODE OFF
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Desktop integration — generate .desktop file with absolute paths
+# (Linux-only: skip on Windows, where there is no freedesktop entry)
 # ---------------------------------------------------------------------------
 
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/res/v06c-debugger.desktop.in
-    ${CMAKE_CURRENT_BINARY_DIR}/v06c-debugger.desktop
-    @ONLY
-)
-
-# make install-desktop — copy .desktop to ~/.local/share/applications/
-add_custom_target(install-desktop
-    COMMAND ${CMAKE_COMMAND} -E copy
+if(NOT WIN32)
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/res/v06c-debugger.desktop.in
         ${CMAKE_CURRENT_BINARY_DIR}/v06c-debugger.desktop
-        $ENV{HOME}/.local/share/applications/v06c-debugger.desktop
-    COMMENT "Installing v06c-debugger.desktop to ~/.local/share/applications/"
-)
+        @ONLY
+    )
+
+    # make install-desktop — copy .desktop to ~/.local/share/applications/
+    add_custom_target(install-desktop
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_BINARY_DIR}/v06c-debugger.desktop
+            $ENV{HOME}/.local/share/applications/v06c-debugger.desktop
+        COMMENT "Installing v06c-debugger.desktop to ~/.local/share/applications/"
+    )
+endif()

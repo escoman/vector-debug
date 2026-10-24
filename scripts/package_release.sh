@@ -47,6 +47,13 @@ cp "$DEBUGGER" "$MCP" "$EXPORTER" "$STAGE/"
 # Ship the tuned workspace preset (tracked at repo-root workspaces/).
 [ -f "$ROOT/workspaces/Default.ini" ] && cp "$ROOT/workspaces/Default.ini" "$STAGE/workspaces/" || true
 
+# Ship the bundled font assets (tracked at repo-root res/fonts/) next to the
+# executables — the GUI loads DejaVuSansMono.ttf via SDL_GetBasePath()+"fonts/".
+if [ -d "$ROOT/res/fonts" ]; then
+  mkdir -p "$STAGE/fonts"
+  cp "$ROOT"/res/fonts/*.ttf "$STAGE/fonts/" 2>/dev/null || true
+fi
+
 # Linux: bundle a relocatable .desktop launcher + icon. The build-time CMake
 # version embeds absolute /build paths; rewrite Exec to resolve against the
 # .desktop file itself (%k field code) and use a theme Icon name instead of an
@@ -59,11 +66,26 @@ if [ "$PLATFORM" = "linux" ] && [ -f "$ROOT/res/v06c-debugger.desktop.in" ]; the
 fi
 
 # Windows: bundle the MinGW/SDL2 runtime DLLs next to the executables so the
-# self-contained folder runs without a package manager. Best-effort by design.
+# self-contained folder runs without a package manager. In MSYS2 MINGW64 the
+# runtime DLLs live under $MINGW_PREFIX/bin (i.e. /mingw64/bin), NOT on PATH,
+# so `command -v` cannot find them — resolve them from the prefix directly.
+# Each logical dependency may ship under different file names across MSYS2
+# versions (e.g. SDL2 renamed its runtime from libSDL2-2.0-0.dll to SDL2.dll),
+# so try a list of candidates per dependency and copy the first that exists.
 if [ "$PLATFORM" = "windows" ]; then
-  for dll in libSDL2-2.0-0.dll libgcc_s_seh-1.dll libwinpthread-1.dll libstdc++-6.dll; do
-    p="$(command -v "$dll" 2>/dev/null || true)"
-    if [ -n "$p" ]; then cp "$p" "$STAGE/"; else echo "warn: $dll not found on PATH, skipping" >&2; fi
+  DLL_DIR="${MINGW_PREFIX:-/mingw64}/bin"
+  copy_dll() {   # $1..: candidate file names; copies the first one found
+    for cand in "$@"; do
+      if [ -f "$DLL_DIR/$cand" ]; then
+        cp "$DLL_DIR/$cand" "$STAGE/"
+        return 0
+      fi
+    done
+    return 1
+  }
+  for group in "SDL2.dll libSDL2-2.0-0.dll" "libgcc_s_seh-1.dll" "libwinpthread-1.dll" "libstdc++-6.dll"; do
+    # shellcheck disable=SC2086  # intentional word-splitting into candidates
+    copy_dll $group || echo "warn: none of [$group] found in $DLL_DIR, skipping" >&2
   done
 fi
 

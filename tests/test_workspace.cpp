@@ -18,6 +18,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include "test_tmp_dir.h"
+
 // ---------------------------------------------------------------------------
 // Minimal test framework
 // ---------------------------------------------------------------------------
@@ -46,12 +48,15 @@ static int tests_failed = 0;
 // Helpers
 // ---------------------------------------------------------------------------
 
-static const char *kTestDir = "/tmp/test_workspace_ws";
+// Portable temp workspace dir (Linux: /tmp, Windows: %TEMP%). The const char*
+// alias keeps existing initialize()/stat()/std::string() call sites unchanged.
+static const std::string kTestDirStr = testTmpPath("test_workspace_ws");
+static const char *kTestDir = kTestDirStr.c_str();
 
 static void removeDirRecursive(const std::string &path)
 {
-    std::string cmd = "rm -rf " + path;
-    system(cmd.c_str());
+    // std::filesystem-based: system("rm -rf") is not available on Windows.
+    testRemoveTree(path);
 }
 
 static bool fileExists(const std::string &path)

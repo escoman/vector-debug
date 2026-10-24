@@ -20,6 +20,7 @@
 #include "debug_target.h"
 #include "events.h"
 #include "options.h"
+#include "test_tmp_dir.h"
 
 // ---------------------------------------------------------------------------
 // Global references needed by debug_adapter.cpp (weak dependency)
@@ -1901,7 +1902,7 @@ static void test_mcp_command_queue_and_rdb_workflow()
     CHECK(r7.value.dirty, "RDB reports dirty=true");
 
     // --- Part 3: Save and reload ---
-    std::string testPath = "/tmp/test_stage615.rdb";
+    std::string testPath = testTmpPath("test_stage615.rdb");
     rdb.saveAs(testPath);
     CHECK(!rdb.isDirty(), "RDB clean after save");
 
@@ -1998,7 +1999,7 @@ static void test_create_function_creates_rdb_object()
     CHECK(r5.value.objectCount == 2, "RDB has 2 objects after createFunction + addLabel");
 
     // --- Save and reload ---
-    std::string testPath = "/tmp/test_stage615_iter2.rdb";
+    std::string testPath = testTmpPath("test_stage615_iter2.rdb");
     rdb.saveAs(testPath);
     CHECK(!rdb.isDirty(), "RDB clean after save");
 

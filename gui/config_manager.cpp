@@ -6,6 +6,7 @@
 #include <sstream>
 #include <cstdio>
 #include <algorithm>
+#include <filesystem>
 #include <sys/stat.h>
 
 // ---------------------------------------------------------------------------
@@ -129,8 +130,12 @@ bool ConfigManager::loadFromFile()
                 size_t pos = value.find('|', start);
                 if (pos == std::string::npos) pos = value.size();
                 std::string entry = value.substr(start, pos - start);
-                // Validate: must be a non-empty path to an existing file
-                if (!entry.empty() && entry.size() < 4096 && entry[0] == '/') {
+                // Validate: must be a non-empty absolute path to an existing
+                // file. is_absolute() covers both POSIX ("/…") and Windows
+                // ("C:\…", "\\host\share") forms — the old entry[0]=='/'
+                // check silently dropped every Windows path on reload.
+                if (!entry.empty() && entry.size() < 4096 &&
+                        std::filesystem::path(entry).is_absolute()) {
                     struct stat st;
                     if (stat(entry.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
                         // Deduplicate: skip if already in list

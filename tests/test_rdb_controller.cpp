@@ -6,6 +6,8 @@
 #include <iostream>
 #include <string>
 
+#include "test_tmp_dir.h"
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -39,8 +41,12 @@ static int testsFailed = 0;
 #define ASSERT_EQ(a, b) \
     do { if ((a) != (b)) throw std::runtime_error("Assertion failed: " #a " != " #b); } while(0)
 
-static const char *TEST_RDB_PATH = "/tmp/test_rdb_controller.rdb";
-static const char *TEST_RDB_TMP  = "/tmp/test_rdb_controller_tmp.rdb";
+// Portable temp paths (Linux: /tmp, Windows: %TEMP%). The const char* aliases
+// keep existing ::remove()/std::string() call sites unchanged.
+static const std::string TEST_RDB_PATH_STR = testTmpPath("test_rdb_controller.rdb");
+static const std::string TEST_RDB_TMP_STR  = testTmpPath("test_rdb_controller_tmp.rdb");
+static const char *TEST_RDB_PATH = TEST_RDB_PATH_STR.c_str();
+static const char *TEST_RDB_TMP  = TEST_RDB_TMP_STR.c_str();
 
 static void cleanupTestFiles()
 {
@@ -705,7 +711,7 @@ TEST(save_without_dirty_returns_true)
 TEST(load_nonexistent_fails)
 {
     RdbController ctrl;
-    ASSERT(!ctrl.load("/tmp/nonexistent_rdb_test_file.rdb"));
+    ASSERT(!ctrl.load(testTmpPath("nonexistent_rdb_test_file.rdb")));
     ASSERT(!ctrl.isLoaded());
 }
 

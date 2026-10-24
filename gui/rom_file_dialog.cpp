@@ -6,11 +6,27 @@
 // Directory listing
 #include <dirent.h>
 #include <sys/stat.h>
+#include <cstdlib>   // _fullpath (Windows stand-in for realpath)
 #include <cstring>
 #include <algorithm>
 #include <cctype>
 #include <unistd.h>
 #include <climits>
+
+// ---------------------------------------------------------------------------
+// Portable path resolution.
+// MinGW-w64 does not provide POSIX realpath(); _fullpath resolves a relative
+// path to an absolute one, which is all this file dialog needs.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+static char* resolveRealPath(const char* path, char* resolved) {
+    return _fullpath(resolved, path, PATH_MAX);
+}
+#else
+static char* resolveRealPath(const char* path, char* resolved) {
+    return realpath(path, resolved);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -33,7 +49,7 @@ void RomFileDialog::show(const std::string &startDir,
     } else if (startDir[0] != '/') {
         // Resolve relative path to absolute
         char resolved[PATH_MAX];
-        if (realpath(startDir.c_str(), resolved)) {
+        if (resolveRealPath(startDir.c_str(), resolved)) {
             currentPath_ = resolved;
         } else {
             currentPath_ = startDir;

@@ -22,6 +22,7 @@
 #include "debug_adapter.h"
 #include "i8080.h"
 #include "sound_window.h"
+#include "test_tmp_dir.h"
 
 // CPU accessors (i8080_iff/i8080_pc/i8080_regs_sp) live in this namespace.
 using namespace i8080cpu;
@@ -696,7 +697,7 @@ static void test_loadrom_silences_stuck_note(DebugAdapter &adapter)
     CHECK_EQ(1, s.standardNoise.lastLevel, "before reload: tape-out level high");
 
     // --- Load ROM 2: must replay the boot ROM's port initialization.
-    const std::string rom2 = "/tmp/v06c_test_stuck_note_second.rom";
+    const std::string rom2 = testTmpPath("v06c_test_stuck_note_second.rom");
     {
         std::ofstream f(rom2, std::ios::binary);
         const uint8_t ret = 0xC9;    // harmless RET at 0100
@@ -746,7 +747,7 @@ static void test_loadrom_disables_inherited_interrupts(DebugAdapter &adapter)
     for (int i = 0; i < 3; ++i) adapter.stepInstruction();
     CHECK(i8080_iff(), "old program brought IFF up");
 
-    const std::string rom = "/tmp/v06c_test_inherited_interrupts.rom";
+    const std::string rom = testTmpPath("v06c_test_inherited_interrupts.rom");
     {
         std::ofstream f(rom, std::ios::binary);
         // JMP 0100 — a self-loop the NOP slide from 0000 lands in. It touches

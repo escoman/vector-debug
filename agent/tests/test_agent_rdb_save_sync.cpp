@@ -25,6 +25,7 @@
 #include "debug_target.h"
 #include "events.h"
 #include "options.h"
+#include "test_tmp_dir.h"
 
 // ---------------------------------------------------------------------------
 // HAL stubs (needed by i8080.cpp)
@@ -113,7 +114,11 @@ static int tests_failed = 0;
 // Helpers
 // ---------------------------------------------------------------------------
 
-static const char *TEMP_ROM = "/tmp/test_rdb_sync.rom";
+// Portable temp ROM path (Linux: /tmp, Windows: %TEMP%). TEMP_ROM stays a
+// const char* so existing std::remove()/writeTempRom()/loadRom() call sites
+// are unchanged; it points into the static string's stable buffer.
+static const std::string TEMP_ROM_STR = testTmpPath("test_rdb_sync.rom");
+static const char *TEMP_ROM = TEMP_ROM_STR.c_str();
 
 static void writeTempRom(const char *path)
 {

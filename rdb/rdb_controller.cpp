@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -338,9 +339,15 @@ bool RdbController::saveAs(const std::string &path)
             return false;
         }
 
-        // Atomic rename
-        if (::rename(tmpPath.c_str(), path.c_str()) != 0) {
-            ::remove(tmpPath.c_str());
+        // Atomic rename. std::filesystem::rename overwrites an existing
+        // destination on Windows too; POSIX ::rename does too, but the CRT
+        // ::rename on Windows fails when the target already exists — which
+        // broke every re-save of the same .rdb path.
+        std::error_code rec;
+        std::filesystem::rename(tmpPath, path, rec);
+        if (rec) {
+            std::error_code rim;
+            std::filesystem::remove(tmpPath, rim);
             return false;
         }
 

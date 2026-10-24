@@ -16,6 +16,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include "test_tmp_dir.h"
+
 // ---------------------------------------------------------------------------
 // Minimal test framework
 // ---------------------------------------------------------------------------
@@ -44,18 +46,21 @@ static int tests_failed = 0;
 // Helpers
 // ---------------------------------------------------------------------------
 
-static const char *kTestDir = "/tmp/test_config_manager";
+// Portable temp config dir (Linux: /tmp, Windows: %TEMP%). The const char*
+// alias keeps existing initialize()/std::string() call sites unchanged.
+static const std::string kTestDirStr = testTmpPath("test_config_manager");
+static const char *kTestDir = kTestDirStr.c_str();
 
 static void removeDirRecursive(const std::string &path)
 {
-    std::string cmd = "rm -rf " + path;
-    system(cmd.c_str());
+    // std::filesystem-based: system("rm -rf") is not available on Windows.
+    testRemoveTree(path);
 }
 
 static void createTestDir()
 {
     removeDirRecursive(kTestDir);
-    mkdir(kTestDir, 0755);
+    testMakeDir(kTestDir);
 }
 
 static ImGuiContext *createTestContext()
@@ -72,13 +77,10 @@ static void destroyTestContext(ImGuiContext *ctx)
 // Create a fake ROM file so that stat() in loadFromFile() succeeds
 static void createFakeRom(const std::string &path)
 {
-    // Ensure parent directories exist
-    std::string dir;
-    for (size_t i = 0; i < path.size(); ++i) {
-        dir += path[i];
-        if (path[i] == '/') {
-            mkdir(dir.c_str(), 0755);
-        }
+    // Ensure the parent directory exists (portable mkdir -p).
+    size_t sep = path.find_last_of("/\\");
+    if (sep != std::string::npos) {
+        testMakeDir(path.substr(0, sep));
     }
     std::ofstream f(path);
     f << "FAKE_ROM";
@@ -109,9 +111,9 @@ static int countOccurrences(const std::string &haystack, const std::string &need
 // ---------------------------------------------------------------------------
 
 static const std::string kRiseout =
-    "/tmp/test_config_manager/roms/riseout.rom";
+    testTmpPath("test_config_manager/roms/riseout.rom");
 static const std::string kDt2Lz =
-    "/tmp/test_config_manager/roms/dt2_lz.rom";
+    testTmpPath("test_config_manager/roms/dt2_lz.rom");
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -275,7 +277,7 @@ static void test_addAfterLoadedDuplicatesCleansUp()
     createFakeRom(kRiseout);
     createFakeRom(kDt2Lz);
 
-    std::string thirdRom = "/tmp/test_config_manager/roms/third.rom";
+    std::string thirdRom = testTmpPath("test_config_manager/roms/third.rom");
     createFakeRom(thirdRom);
 
     // Config with 3 copies of riseout
@@ -334,8 +336,8 @@ static void test_maxRecentRomsCap()
     // Create 12 fake ROMs
     std::vector<std::string> paths;
     for (int i = 0; i < 12; ++i) {
-        std::string path = "/tmp/test_config_manager/roms/rom" +
-                           std::to_string(i) + ".rom";
+        std::string path = testTmpPath("test_config_manager/roms/rom" +
+                                       std::to_string(i) + ".rom");
         createFakeRom(path);
         paths.push_back(path);
     }

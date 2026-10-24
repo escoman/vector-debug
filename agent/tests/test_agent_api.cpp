@@ -11,6 +11,7 @@
 
 #include "agent_api.h"
 #include "mock_backend_for_agent.h"
+#include "test_tmp_dir.h"
 
 // ---------------------------------------------------------------------------
 // Test framework
@@ -2032,7 +2033,7 @@ static void test_rdb_link_persistence()
     api.addRdbLink(0x0100, 0x0200);
 
     // Save to temp file
-    std::string tmpPath = "/tmp/test_rdb_link_persistence.rdb";
+    std::string tmpPath = testTmpPath("test_rdb_link_persistence.rdb");
     auto &rdb = mock.rdbController();
     CHECK(rdb.saveAs(tmpPath), "save succeeds");
 

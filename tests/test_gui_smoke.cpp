@@ -10,16 +10,26 @@
 //   - Launch with a test ROM loaded
 //
 // Requires a display (X11/Wayland). In headless CI, wrap with xvfb-run.
+// On Windows the debugger is spawned via CreateProcess; the graceful-shutdown
+// step posts WM_CLOSE to its window (SDL maps it to SDL_QUIT ≡ SIGTERM here).
+
+#include "test_tmp_dir.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <csignal>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
-#include <string>
 #include <poll.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // Minimal test framework
@@ -50,6 +60,20 @@ static int tests_failed = 0;
 static std::string debuggerBinaryPath()
 {
     // The test binary and v06c-debugger are in the same CMake build dir
+#ifdef _WIN32
+    char buf[4096];
+    DWORD len = GetModuleFileNameA(nullptr, buf, sizeof(buf) - 1);
+    if (len == 0) return "";
+    buf[len] = '\0';
+
+    // Strip executable name to get directory (accept either separator)
+    char *slash = strrchr(buf, '\\');
+    char *fwd  = strrchr(buf, '/');
+    if (fwd && (!slash || fwd > slash)) slash = fwd;
+    if (slash) *(slash + 1) = '\0';
+
+    return std::string(buf) + "v06c-debugger.exe";
+#else
     char buf[4096];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (len <= 0) return "";
@@ -60,15 +84,40 @@ static std::string debuggerBinaryPath()
     if (slash) *(slash + 1) = '\0';
 
     return std::string(buf) + "v06c-debugger";
+#endif
 }
 
 static bool fileExists(const std::string &path)
 {
+#ifdef _WIN32
+    return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+#else
     struct stat st;
     return stat(path.c_str(), &st) == 0;
+#endif
 }
 
-// Read available output from a pipe fd into a string (non-blocking).
+// Read available output from the capture pipe into a string (non-blocking).
+#ifdef _WIN32
+static std::string readAvailable(HANDLE hPipe, int timeout_ms = 500)
+{
+    std::string result;
+    char buf[1024];
+    DWORD avail = 0;
+
+    // PeekNamedPipe fails once the write end is closed (child exited) — stop.
+    while (PeekNamedPipe(hPipe, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+        if (timeout_ms <= 0) break;
+        DWORD n = 0;
+        if (!ReadFile(hPipe, buf, sizeof(buf) - 1, &n, nullptr) || n == 0) break;
+        buf[n] = '\0';
+        result += buf;
+        timeout_ms = 100;  // subsequent reads: shorter wait
+        Sleep(10);
+    }
+    return result;
+}
+#else
 static std::string readAvailable(int fd, int timeout_ms = 500)
 {
     std::string result;
@@ -86,6 +135,7 @@ static std::string readAvailable(int fd, int timeout_ms = 500)
     }
     return result;
 }
+#endif
 
 struct ProcessResult {
     bool started;         // process was spawned successfully
@@ -97,6 +147,125 @@ struct ProcessResult {
 
 // Spawn v06c-debugger with optional arguments, wait, then send SIGTERM.
 // Returns collected output and exit status.
+#ifdef _WIN32
+// EnumWindows callback: post WM_CLOSE to every visible window of the child
+// process. SDL translates the window close into SDL_QUIT, which the GUI main
+// loop handles as a graceful shutdown — the Windows equivalent of SIGTERM.
+static BOOL CALLBACK closeWindowProc(HWND hwnd, LPARAM lParam)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == static_cast<DWORD>(lParam) && IsWindowVisible(hwnd))
+        PostMessageA(hwnd, WM_CLOSE, 0, 0);
+    return TRUE;
+}
+
+static ProcessResult spawnDebugger(const std::string &binary,
+                                    const std::string &extraArg,
+                                    int runSeconds)
+{
+    ProcessResult res;
+    res.started = false;
+    res.crashed = false;
+    res.exitStatus = -1;
+    res.termSignal = 0;
+
+    // Inheritable pipe capturing the child's stdout+stderr
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE hPipeR = nullptr, hPipeW = nullptr;
+    if (!CreatePipe(&hPipeR, &hPipeW, &sa, 0)) {
+        res.output = "CreatePipe() failed";
+        return res;
+    }
+    SetHandleInformation(hPipeR, HANDLE_FLAG_INHERIT, 0);  // read end: parent-only
+
+    // Redirect workspace/config writes to a temp directory so that smoke
+    // tests don't clobber the user's real workspace presets.
+    const std::string tmpDir = testTmpPath("v06c_test_workspaces");
+    testMakeDir(tmpDir);
+
+    // Build a copy of the current environment with the overrides appended
+    // (CreateProcessA takes an explicit ANSI environment block).
+    std::vector<std::string> env;
+    for (char *p = GetEnvironmentStringsA(); p && *p; p += strlen(p) + 1)
+        env.emplace_back(p);
+    auto setVar = [&env](const char *name, const std::string &value) {
+        std::string kv = std::string(name) + "=" + value;
+        for (auto &e : env)
+            if (_stricmp(e.c_str(), kv.c_str()) == 0) { e = kv; return; }
+        env.push_back(kv);
+    };
+    setVar("V06C_WORKSPACE_DIR", tmpDir);
+    setVar("V06C_CONFIG_DIR", tmpDir);
+    std::string envBlock;
+    for (const auto &e : env) envBlock += e;
+    envBlock += '\0';
+
+    std::string cmd = '"' + binary + '"';
+    if (!extraArg.empty()) cmd += " \"" + extraArg + '"';
+    std::vector<char> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back('\0');
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = hPipeW;
+    si.hStdError = hPipeW;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                        CREATE_NO_WINDOW,
+                        envBlock.data(), nullptr, &si, &pi)) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "CreateProcess() failed (err=%lu)", GetLastError());
+        res.output = msg;
+        CloseHandle(hPipeR);
+        CloseHandle(hPipeW);
+        return res;
+    }
+    CloseHandle(hPipeW);  // parent's copy — child holds its own
+    CloseHandle(pi.hThread);
+    res.started = true;
+
+    // Run for the specified duration, draining the pipe so a chatty child
+    // never blocks on a full pipe buffer
+    for (int i = 0; i < runSeconds * 20; ++i) {
+        Sleep(50);
+        res.output += readAvailable(hPipeR, 0);
+    }
+
+    // Graceful shutdown: WM_CLOSE → SDL_QUIT (≡ SIGTERM on POSIX)
+    EnumWindows(closeWindowProc, static_cast<LPARAM>(pi.dwProcessId));
+
+    // Wait up to ~5s for exit, collecting output while waiting
+    bool exited = false;
+    for (int i = 0; i < 50 && !exited; ++i) {
+        exited = (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0);
+        res.output += readAvailable(hPipeR, 0);
+    }
+    if (!exited)
+        TerminateProcess(pi.hProcess, 1);
+    WaitForSingleObject(pi.hProcess, 5000);
+
+    // Drain remaining buffered output
+    res.output += readAvailable(hPipeR, 200);
+
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    res.exitStatus = static_cast<int>(exitCode);
+    // NT statuses (0xC0000000 and above) mean abnormal termination
+    // (heap corruption, AV, abort…) — the Windows counterpart of a fatal signal
+    if ((exitCode & 0xC0000000) != 0)
+        res.crashed = true;
+
+    CloseHandle(hPipeR);
+    CloseHandle(pi.hProcess);
+    return res;
+}
+#else
 static ProcessResult spawnDebugger(const std::string &binary,
                                     const std::string &extraArg = "",
                                     int runSeconds = 3)
@@ -129,11 +298,11 @@ static ProcessResult spawnDebugger(const std::string &binary,
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
 
-        // Redirect workspace writes to a temp directory so that smoke
-        // tests don't clobber the user's real workspace presets.
-        setenv("V06C_WORKSPACE_DIR", "/tmp/v06c_test_workspaces", 1);
+        const std::string tmpDir = testTmpPath("v06c_test_workspaces");
+        testMakeDir(tmpDir);
+        setenv("V06C_WORKSPACE_DIR", tmpDir.c_str(), 1);
         // Redirect config.ini to temp directory as well
-        setenv("V06C_CONFIG_DIR", "/tmp/v06c_test_workspaces", 1);
+        setenv("V06C_CONFIG_DIR", tmpDir.c_str(), 1);
 
         if (extraArg.empty()) {
             execl(binary.c_str(), binary.c_str(), nullptr);
@@ -198,6 +367,7 @@ static ProcessResult spawnDebugger(const std::string &binary,
 
     return res;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -222,7 +392,11 @@ static void test_launchWithoutRom()
 
     if (res.crashed) {
         char msg[128];
+#ifdef _WIN32
+        snprintf(msg, sizeof(msg), "crashed: exit status 0x%08X", (unsigned)res.exitStatus);
+#else
         snprintf(msg, sizeof(msg), "crashed with signal %d", res.termSignal);
+#endif
         FAIL(msg);
         return;
     }
@@ -249,6 +423,11 @@ static void test_launchWithTestRom()
     // Find a test ROM — look relative to the build directory
     // Build dir is same as binary location; testroms/ now lives in the
     // emulator submodule at vendor/v06c-emu/testroms
+    // Derive the build directory from the debugger binary path
+    std::string buildDir;
+#ifdef _WIN32
+    buildDir = binary.substr(0, binary.find_last_of("\\/") + 1);
+#else
     char buf[4096];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (len <= 0) {
@@ -258,7 +437,8 @@ static void test_launchWithTestRom()
     buf[len] = '\0';
     char *slash = strrchr(buf, '/');
     if (slash) *(slash + 1) = '\0';
-    std::string buildDir = buf;
+    buildDir = buf;
+#endif
 
     // Navigate from build/ to the repo root, then into the emulator submodule:
     // build/ is at <repo>/build/, so testroms is ../vendor/v06c-emu/testroms
@@ -287,7 +467,11 @@ static void test_launchWithTestRom()
 
     if (res.crashed) {
         char msg[128];
+#ifdef _WIN32
+        snprintf(msg, sizeof(msg), "crashed: exit status 0x%08X", (unsigned)res.exitStatus);
+#else
         snprintf(msg, sizeof(msg), "crashed with signal %d", res.termSignal);
+#endif
         FAIL(msg);
         return;
     }

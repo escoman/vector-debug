@@ -13,6 +13,17 @@
 #include <unistd.h>
 
 // ---------------------------------------------------------------------------
+// Portable single-directory create.
+// POSIX mkdir() takes a mode; MinGW's mkdir() (from io.h) takes only a path.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+#include <direct.h>
+static int makeDir(const char* path) { return _mkdir(path); }
+#else
+static int makeDir(const char* path) { return mkdir(path, 0755); }
+#endif
+
+// ---------------------------------------------------------------------------
 // Static data
 // ---------------------------------------------------------------------------
 
@@ -564,7 +575,7 @@ std::string WorkspaceManager::sanitizeFilename(const std::string &name)
 
 void WorkspaceManager::ensureDirectory() const
 {
-    mkdir(workspacesDir_.c_str(), 0755);
+    makeDir(workspacesDir_.c_str());
 }
 
 void WorkspaceManager::saveCurrentVisibility()

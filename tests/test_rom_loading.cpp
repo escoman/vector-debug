@@ -24,6 +24,7 @@
 #include "no_board_target.h"
 #include "rom_load_address.h"
 #include "backend.h"
+#include "test_tmp_dir.h"
 
 using namespace i8080cpu;
 
@@ -115,7 +116,7 @@ static int tests_failed = 0;
 static std::string write_temp_rom(const std::string &name,
                                   const std::vector<uint8_t> &data)
 {
-    std::string path = "/tmp/v06c_test_" + name;
+    std::string path = testTmpPath("v06c_test_" + name);
     std::ofstream f(path, std::ios::binary);
     f.write(reinterpret_cast<const char*>(data.data()), data.size());
     f.close();

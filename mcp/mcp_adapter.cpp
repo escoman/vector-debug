@@ -2253,7 +2253,11 @@ void McpServer::registerServerTools() {
             auto isoUtc = [](std::time_t t) -> std::string {
                 char buf[32];
                 std::tm tm{};
-                gmtime_r(&t, &tm);
+#ifdef _WIN32
+                gmtime_s(&tm, &t);   // Windows thread-safe variant (args reversed)
+#else
+                gmtime_r(&t, &tm);   // POSIX thread-safe variant
+#endif
                 std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
                 return buf;
             };

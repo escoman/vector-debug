@@ -53,6 +53,7 @@ pacman -S --noconfirm --needed \
   mingw-w64-x86_64-SDL2 \
   mingw-w64-x86_64-nlohmann-json \
   mingw-w64-x86_64-binutils \
+  mingw-w64-x86_64-pkg-config \
   make zip
 ```
 

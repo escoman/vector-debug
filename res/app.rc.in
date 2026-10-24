@@ -1,0 +1,11 @@
+// Windows application icon resource.
+//
+// Generated into the build directory by CMake (see res/app.rc.in handling in
+// CMakeLists.txt) and linked into every v06c-* executable on Windows so the
+// file shows the project icon in Explorer and on the taskbar, matching the
+// role res/icon64.png + the .desktop launcher play on Linux.
+//
+// VDB_ICON_ABS is substituted with an absolute path to res/icon.ico at
+// configure time, so windres resolves it regardless of the build CWD.
+// Resource ID 1 becomes the exe's default icon (RT_GROUP_ICON).
+1 ICON "@VDB_ICON_ABS@"

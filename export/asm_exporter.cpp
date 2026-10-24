@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <set>
@@ -31,9 +32,11 @@ static bool writeFile(const std::string &path, const std::string &content)
 
 static bool mkdirs(const std::string &path)
 {
-    // Simple recursive mkdir — creates parent directories as needed.
-    std::string cmd = "mkdir -p '" + path + "'";
-    return system(cmd.c_str()) == 0;
+    // Portable recursive mkdir — creates parent directories as needed.
+    // (system("mkdir -p") is POSIX shell syntax and fails on Windows.)
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);
+    return !ec || std::filesystem::is_directory(path);
 }
 
 static std::string basename(const std::string &path)

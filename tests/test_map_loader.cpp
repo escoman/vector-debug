@@ -12,6 +12,7 @@
 
 #include "map_loader.h"
 #include "symbol_database.h"
+#include "test_tmp_dir.h"
 
 // ---------------------------------------------------------------------------
 // Test framework
@@ -372,7 +373,7 @@ static void test_load_from_disk()
 {
     TEST_BEGIN("loadMapFile — write and read real file");
 
-    std::string path = "/tmp/test_z88dk.map";
+    std::string path = testTmpPath("test_z88dk.map");
     {
         std::ofstream f(path);
         f << "_main = $0252 ; addr, public, main.c::main::0::1:109\n";
@@ -399,7 +400,7 @@ static void test_load_old_keyboard_from_disk()
 {
     TEST_BEGIN("loadMapFile — old keyboard .map rejected from disk");
 
-    std::string path = "/tmp/test_old_keymap.map";
+    std::string path = testTmpPath("test_old_keymap.map");
     {
         std::ofstream f(path);
         f << "[keyboard]\n";

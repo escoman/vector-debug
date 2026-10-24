@@ -18,6 +18,7 @@
 #include "debug_target.h"
 #include "events.h"
 #include "options.h"
+#include "test_tmp_dir.h"
 
 // ---------------------------------------------------------------------------
 // HAL stubs (needed by i8080.cpp)
@@ -93,8 +94,13 @@ static int tests_failed = 0;
 // Helpers: create temporary ROM files
 // ---------------------------------------------------------------------------
 
-static const char *TEMP_ROM_A = "/tmp/test_rom_a.rom";
-static const char *TEMP_ROM_B = "/tmp/test_rom_b.rom";
+// Portable temp ROM paths (Linux: /tmp, Windows: %TEMP%). The const char*
+// aliases keep existing std::remove()/writeTempRom()/loadRom() call sites
+// unchanged; they point into the static strings' stable buffers.
+static const std::string TEMP_ROM_A_STR = testTmpPath("test_rom_a.rom");
+static const std::string TEMP_ROM_B_STR = testTmpPath("test_rom_b.rom");
+static const char *TEMP_ROM_A = TEMP_ROM_A_STR.c_str();
+static const char *TEMP_ROM_B = TEMP_ROM_B_STR.c_str();
 
 static void writeTempRom(const char *path, const std::vector<uint8_t> &data)
 {

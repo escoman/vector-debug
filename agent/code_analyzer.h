@@ -23,6 +23,7 @@
 #include <set>
 #include <queue>
 #include <unordered_map>
+#include <algorithm>   // std::sort (not transitively available on libstdc++ 16+)
 
 // ---------------------------------------------------------------------------
 // Result types

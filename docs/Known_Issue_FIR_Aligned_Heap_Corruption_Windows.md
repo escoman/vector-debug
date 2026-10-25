@@ -1,7 +1,8 @@
 # Known Issue — повреждение кучи (STATUS_HEAP_CORRUPTION) в `coredsp::FIR` на Windows
 
-- **Статус:** Open (решено чинить на Linux-сборке/upstream сначала; submodule
-  `vendor/v06c-emu` в этой ветке намеренно **не** патчится)
+- **Статус:** Fixed upstream — исправлено в submodule `vendor/v06c-emu`
+  (commit `54afa7f` на ветке `4write`, запушено в `escoman/vector06sdl`). Гитлинк в
+  этом репозитории обновлён на `54afa7f`. Требуется проверка на Windows-CI.
 - **Обнаружено:** прогон тестовой сюиты под MinGW/MSYS2 (Windows-порт)
 - **Влияние:** 6 тестовых бинарей падают/флакают на Windows, хотя все ассерты проходят:
   `test_board_smoke`, `test_sound_window`, `test_audio_midi`, `test_agent_mock`
@@ -71,9 +72,9 @@ build\test_audio_midi.exe    ; $LASTEXITCODE   # -> 0xC0000374 в середин
 #   приводит к падению потомка с 0xC0000374 в деструкторе FIR -> 0/3 FAIL
 ```
 
-## Предлагаемое исправление (upstream / сначала на Linux)
+## Применённое исправление (upstream)
 
-Однострочник в submodule — привести deleter `x_aligned` в соответствие с alloc, по
+Однострочник в submodule — deleter `x_aligned` приведён в соответствие с alloc, по
 образу уже корректного `c_`:
 
 ```cpp
@@ -82,16 +83,16 @@ build\test_audio_midi.exe    ; $LASTEXITCODE   # -> 0xC0000374 в середин
 + std::unique_ptr<real_type[], coreutil::aligned_delete<real_type>> x_aligned;
 ```
 
-Это platform-agnostic правка (на Linux `aligned_delete`→`free`, что сейчас и так
-работает; на Windows даёт нужный `_aligned_free`). Прогнать тесты на Linux-сборке,
-убедиться в отсутствии регрессий и отправить патч в `vector06sdl` (ветка `4write`);
-затем обновить submodule-гитлинк здесь. Правка **не** выполняется в этой Windows-ветке
-по согласованному решению.
+Это platform-agnostic правка (на Linux `aligned_delete`→`free`, что и так работало;
+на Windows даёт нужный `_aligned_free`). Правка закоммичена в `vector06sdl`
+(ветка `4write`, commit `54afa7f`) и запушена в origin. Linux-сборка перепроверена —
+регрессий нет (`test_board_smoke`, `test_sound_window`, `test_audio_midi`,
+`test_agent_mock`, `test_mcp_protocol` зелёные). Гитлинк submodule в этом
+репозитории обновлён на `54afa7f`.
 
-## Временное состояние Windows-CI
+## Состояние Windows-CI (ожидает подтверждения)
 
-Пять перечисленных целей остаются красными/flaky как известный Windows-only дефект
-vendored-ресемплера. Их портирование/сборка корректны (`SDL_MAIN_HANDLED`,
-`SDL2_LIB_ONLY`); блокирует исключительно рантайм-крах в submodule.
-`test_gui_smoke` портирован на `CreateProcess`/`WM_CLOSE` и механически корректен,
-но так же упирается в этот дефект (крах потомка на выключении).
+Ожидается, что перечисленные цели (`test_board_smoke`, `test_sound_window`,
+`test_audio_midi`, `test_agent_mock`, `test_mcp_protocol`, `test_gui_smoke`) станут
+зелёными после подтягивания обновлённого submodule-гитлинка. Требуется финальная
+проверка прогона в Windows/MinGW-окружении.

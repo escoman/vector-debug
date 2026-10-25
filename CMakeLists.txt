@@ -657,6 +657,16 @@ if(FONT_ASSETS)
 endif()
 
 # ---------------------------------------------------------------------------
+# Splash/About logo asset (res/logo16.png) — seeded next to the executable so
+# the AboutWindow loads it via SDL_GetBasePath() on every platform. Always
+# overwritten to stay in sync with the tracked source asset.
+# ---------------------------------------------------------------------------
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/res/logo16.png)
+    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/res/logo16.png
+         DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+endif()
+
+# ---------------------------------------------------------------------------
 # Sound Window test executable
 #
 # Part A: pure SoundWindow::analyzeSnapshot / channel-order tests (ImGui
@@ -1239,6 +1249,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/sound_window.cpp
     ${DBG_GUI_DIR}/plane_screen_window.cpp
     ${DBG_GUI_DIR}/rom_database_window.cpp
+    ${DBG_GUI_DIR}/about_window.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -1263,6 +1274,11 @@ target_link_libraries(v06c-debugger
     ${Boost_LIBRARIES}
     Threads::Threads
 )
+
+# vdb_version.h lives under mcp/ — expose it so the About window can show the
+# same semantic version the MCP server reports (uses the header's default when
+# the target is not build-stamped, which is fine for the GUI).
+target_include_directories(v06c-debugger PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/mcp)
 
 # Windows "Add/Remove \"Open with vector-debugger\"\" menu actions write the
 # Explorer context-menu verb under HKCU\\Software\\Classes (registry APIs live

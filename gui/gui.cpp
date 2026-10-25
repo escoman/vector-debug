@@ -201,6 +201,10 @@ bool DebuggerGui::initialize(int width, int height)
     }
     configManager_.initialize(configDir);
 
+    // Bring up the startup splash. It draws on the first frames and auto-hides
+    // once the main window has had a moment to initialize (see AboutWindow).
+    aboutWindow_.showSplash();
+
     return true;
 }
 
@@ -642,6 +646,13 @@ void DebuggerGui::render(IDebugBackend &backend)
         renderStatusBar(backend);
         ImGui::End();
     }
+
+    // --- Splash / About (drawn last so the overlay is top-most) ---
+    if (showAbout_) {
+        showAbout_ = false;
+        aboutWindow_.showAbout();
+    }
+    aboutWindow_.render();
 }
 
 // ---------------------------------------------------------------------------
@@ -894,6 +905,11 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
                 workspaceManager_.resetWorkspace();
             }
             ImGui::EndMenu();
+        }
+
+        // About — top-level, right after Workspace.
+        if (ImGui::MenuItem("About")) {
+            showAbout_ = true;
         }
 
         // Debug controls on the right side

@@ -17,6 +17,7 @@
 #include "sound_window.h"
 #include "plane_screen_window.h"
 #include "rom_database_window.h"
+#include "about_window.h"
 #include "workspace_manager.h"
 #include "config_manager.h"
 #include "idebug_backend.h"
@@ -139,6 +140,10 @@ private:
     
     // VRAM Plane Screen window
     PlaneScreenWindow planeScreen_;
+
+    // Splash / About window (branding overlay at startup + File ▸ About panel)
+    AboutWindow aboutWindow_;
+    bool showAbout_ = false;
 
     // Open ROM dialog state
     bool showOpenRomDialog_ = false;

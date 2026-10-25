@@ -13,6 +13,7 @@
 # is always shipped so the debugger starts with the docking layout out of the box.
 # On linux a relocatable v06c-debugger.desktop launcher (+ icon) is bundled for
 # desktop integration. README.md is intentionally NOT shipped (build-oriented).
+# The staged executables are compressed with the UPX tool vendored under upx/.
 #
 # Shared by local `make release` (linux) and CI (both platforms) — one packaging
 # logic for every path.
@@ -43,6 +44,36 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/workspaces"
 
 cp "$DEBUGGER" "$MCP" "$EXPORTER" "$STAGE/"
+
+# ---------------------------------------------------------------------------
+# Compress the staged executables with UPX — the vendored tool lives under
+# upx/ in this repo (upx/upx for the ELF build, upx/upx.exe for the MinGW
+# build). Debug-built binaries shrink to roughly a quarter (e.g. the ~20 MB
+# debugger -> ~5 MB). This runs on the STAGE copies only, so the build/ tree
+# stays uncompressed for development/tests. Graceful: if the tool is absent or
+# not runnable, warn and ship the uncompressed binaries rather than fail.
+# ---------------------------------------------------------------------------
+if [ "$PLATFORM" = "windows" ]; then
+  UPX="$ROOT/upx/upx.exe"
+  upx_ok() { [ -f "$UPX" ]; }          # Windows runs .exe regardless of the +x bit
+else
+  UPX="$ROOT/upx/upx"
+  upx_ok() { [ -x "$UPX" ]; }
+fi
+
+if upx_ok; then
+  for exe in "$STAGE/v06c-debugger$EXT" "$STAGE/v06c-mcp$EXT" "$STAGE/v06c-asm-export$EXT"; do
+    before=$(stat -c%s "$exe" 2>/dev/null || echo 0)
+    if "$UPX" --best --force "$exe" >/dev/null 2>&1; then
+      after=$(stat -c%s "$exe" 2>/dev/null || echo 0)
+      echo "UPX: $(basename "$exe")  ${before} -> ${after} bytes"
+    else
+      echo "warn: UPX failed on $(basename "$exe"), shipping it uncompressed" >&2
+    fi
+  done
+else
+  echo "warn: UPX not found at '$UPX', shipping uncompressed binaries" >&2
+fi
 
 # Ship the tuned workspace preset (tracked at repo-root workspaces/).
 [ -f "$ROOT/workspaces/Default.ini" ] && cp "$ROOT/workspaces/Default.ini" "$STAGE/workspaces/" || true

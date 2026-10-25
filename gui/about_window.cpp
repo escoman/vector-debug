@@ -27,8 +27,8 @@ constexpr float kCardPad      = 32.0f;    // inner padding of the splash/about c
 // Fixed card sizes let us center deterministically (an AlwaysAutoResize window
 // has no reliable size until the frame after it is laid out, which makes
 // per-frame centering jitter). Content is fixed, so a static box fits.
-constexpr ImVec2 kSplashCardSize{560.0f, 210.0f};
-constexpr ImVec2 kAboutCardSize {560.0f, 270.0f};
+constexpr ImVec2 kSplashCardSize{560.0f, 250.0f};
+constexpr ImVec2 kAboutCardSize {560.0f, 350.0f};
 
 // Top-left corner that centers a `size` box over the main viewport.
 inline ImVec2 centeredOnViewport(ImVec2 size)
@@ -186,20 +186,24 @@ void AboutWindow::drawContent()
     ImGui::Spacing();
 
     ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Developer: Sarmin Alexey");
-    ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Site:");
-    ImGui::SameLine();
 
-    // Clickable URL.
-    const char *site = "https://sarmin.ru";
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.47f, 0.78f, 1.0f, 1.0f));
-    ImGui::TextUnformatted(site);
-    ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            SDL_OpenURL(site);
+    // Clickable URL: accent-colored text, hand cursor and SDL_OpenURL on click.
+    auto renderLink = [](const char *url) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.47f, 0.78f, 1.0f, 1.0f));
+        ImGui::TextUnformatted(url);
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                SDL_OpenURL(url);
+            }
         }
-    }
+    };
+    renderLink("https://sarmin.ru");
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "Emulator engine by svofski:");
+    renderLink("https://github.com/svofski/vector06sdl");
 
     ImGui::PopTextWrapPos();
     ImGui::EndGroup();

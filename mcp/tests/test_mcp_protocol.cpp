@@ -68,9 +68,20 @@ static int tests_failed = 0;
 struct Fixture {
     MockAgentBackend mock;
     AgentApi api;
-    McpServer mcp;
+    // mcp binds to a heap McpServer that is intentionally NEVER deleted.
+    // Why: thirdparty/cpp-mcp's thread_pool has a detached-worker shutdown race
+    // (a worker decrements active_threads_, then re-locks queue_mutex_ to signal
+    // shutdown_cv_ in a SECOND lock scope; the destructor can observe
+    // active_threads_==0 and destroy queue_mutex_ in between, so the worker then
+    // locks a freed mutex and throws std::system_error("Invalid argument") ->
+    // std::terminate; surfaces on Windows thread timing). That is a bug in the
+    // external submodule, NOT in our code, so rather than patch the submodule we
+    // sidestep it here by never running ~McpServer: every assertion completes,
+    // only the unsafe teardown path is avoided. See
+    // docs/Known_Issue_cpp_mcp_thread_pool_shutdown_race.md.
+    McpServer &mcp;
 
-    Fixture() : api(mock), mcp(api) {
+    Fixture() : api(mock), mcp(*new McpServer(api)) {
         mcp.registerAllTools();
     }
 };
@@ -1507,5 +1518,11 @@ int main()
     printf("\033[1;33m\033[0m\n");
     printf("\033[1;33m========================================\033[0m\n\n");
 
-    return tests_failed > 0 ? 1 : 0;
+    // Flush, then terminate abruptly. ~McpServer never runs (the Fixtures leak
+    // on purpose) so no thread_pool teardown is triggered; _Exit additionally
+    // skips static/atexit destructors so no other third-party teardown race can
+    // fire. _Exit does NOT flush stdio, hence fflush(nullptr) first (this also
+    // stops the buffered output from being truncated on abort).
+    std::fflush(nullptr);
+    std::_Exit(tests_failed > 0 ? 1 : 0);
 }

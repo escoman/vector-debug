@@ -2,7 +2,13 @@
 
 - **Статус:** Fixed upstream — исправлено в submodule `vendor/v06c-emu`
   (commit `54afa7f` на ветке `4write`, запушено в `escoman/vector06sdl`). Гитлинк в
-  этом репозитории обновлён на `54afa7f`. Требуется проверка на Windows-CI.
+  этом репозитории обновлён на `54afa7f`.
+- **Проверка (Windows/MinGW, пересборка после подтяжки фик):** все пять целей
+  (`test_board_smoke` 3/3, `test_sound_window` 15/15, `test_audio_midi` 14/14,
+  `test_agent_mock` 1/1, `test_gui_smoke` 3/3) проходят с `EXIT=0`; куча больше не
+  повреждается. `test_mcp_protocol` (61/61) тоже починен, но вскрыл **отдельный**
+  баг — гонку остановки `thread_pool` в `thirdparty/cpp-mcp` (не связана с FIR),
+  см. `Known_Issue_cpp_mcp_thread_pool_shutdown_race.md`.
 - **Обнаружено:** прогон тестовой сюиты под MinGW/MSYS2 (Windows-порт)
 - **Влияние:** 6 тестовых бинарей падают/флакают на Windows, хотя все ассерты проходят:
   `test_board_smoke`, `test_sound_window`, `test_audio_midi`, `test_agent_mock`

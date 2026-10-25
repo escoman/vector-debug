@@ -893,7 +893,7 @@ TEST_BEGIN(clipping_outside_window)
           "clip: 256 page-0 NOPs dropped");
     CHECK(report.coverage.codeBytes == 1, "clip: code bytes = 1");
 
-    std::ifstream lf("/tmp/test_asm_export_clip/layout.asm");
+    std::ifstream lf(testTmpPath("test_asm_export_clip/layout.asm"));
     std::string layout((std::istreambuf_iterator<char>(lf)),
                         std::istreambuf_iterator<char>());
     CHECK(layout.find("nop") == std::string::npos,
@@ -928,13 +928,13 @@ TEST_BEGIN(variable_attribution_and_operand_name)
     var.hasSize = true;
     var.comment = "Named variable, not data";
     rdb.addObject(var);
-    std::string rdbPath = "/tmp/test_asm_export_var.rdb";
+    std::string rdbPath = testTmpPath("test_asm_export_var.rdb");
     rdb.saveAs(rdbPath);
 
     AsmExportConfig config;
     config.romPath = romPath;
     config.rdbPath = rdbPath;
-    config.outputDir = "/tmp/test_asm_export_var";
+    config.outputDir = testTmpPath("test_asm_export_var");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
@@ -952,7 +952,7 @@ TEST_BEGIN(variable_attribution_and_operand_name)
     }
     CHECK(!varHole, "the variable's own bytes are not an uncovered hole");
 
-    std::ifstream lf("/tmp/test_asm_export_var/layout.asm");
+    std::ifstream lf(testTmpPath("test_asm_export_var/layout.asm"));
     std::string layout((std::istreambuf_iterator<char>(lf)),
                         std::istreambuf_iterator<char>());
     CHECK(layout.find("var_flag:") != std::string::npos,
@@ -1004,13 +1004,13 @@ TEST_BEGIN(overlapping_name_keeps_true_address)
     var.hasSize = true;
     rdb.addObject(var);
 
-    std::string rdbPath = "/tmp/test_asm_export_overlap.rdb";
+    std::string rdbPath = testTmpPath("test_asm_export_overlap.rdb");
     rdb.saveAs(rdbPath);
 
     AsmExportConfig config;
     config.romPath = romPath;
     config.rdbPath = rdbPath;
-    config.outputDir = "/tmp/test_asm_export_overlap";
+    config.outputDir = testTmpPath("test_asm_export_overlap");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
@@ -1024,7 +1024,7 @@ TEST_BEGIN(overlapping_name_keeps_true_address)
     }
     CHECK(collisionWarned, "overlap surfaced as a warning, not silently");
 
-    std::ifstream lf("/tmp/test_asm_export_overlap/layout.asm");
+    std::ifstream lf(testTmpPath("test_asm_export_overlap/layout.asm"));
     std::string layout((std::istreambuf_iterator<char>(lf)),
                         std::istreambuf_iterator<char>());
 
@@ -1080,20 +1080,20 @@ TEST_BEGIN(rdb_properties_in_listing)
     func.properties["seed"] = RdbPropertyValue::fromString("0x0030");
     rdb.addObject(func);
 
-    std::string rdbPath = "/tmp/test_asm_export_props.rdb";
+    std::string rdbPath = testTmpPath("test_asm_export_props.rdb");
     rdb.saveAs(rdbPath);
 
     AsmExportConfig config;
     config.romPath = romPath;
     config.rdbPath = rdbPath;
-    config.outputDir = "/tmp/test_asm_export_props";
+    config.outputDir = testTmpPath("test_asm_export_props");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
     AsmExportReport report = exporter.run();
     CHECK(!report.hasErrors(), "property export succeeds");
 
-    std::string code = readWholeFile("/tmp/test_asm_export_props/code/code.asm");
+    std::string code = readWholeFile(testTmpPath("test_asm_export_props/code/code.asm"));
 
     // The value is emitted verbatim (no HTML-entity escaping, no reformatting).
     CHECK(code.find("; params: p0{carrier=pair:DE;size=16} | p1{carrier=A;size=8}")
@@ -1129,7 +1129,7 @@ TEST_BEGIN(rdb_properties_in_listing)
 
     // The same lines belong in layout.asm too (it is the streamed build file,
     // comments there are harmless); the label must stay on its instruction.
-    std::string layout = readWholeFile("/tmp/test_asm_export_props/layout.asm");
+    std::string layout = readWholeFile(testTmpPath("test_asm_export_props/layout.asm"));
     CHECK(layout.find("; params: p0{") != std::string::npos,
           "layout.asm carries the params line");
     CHECK(layout.find("my_func:\n\tnop") != std::string::npos,
@@ -1174,13 +1174,13 @@ TEST_BEGIN(rdb_property_value_stays_on_one_line)
         RdbPropertyValue::fromString("p0{x=1}\nINJECTED\tmvi\ta,0FFh");
     rdb.addObject(func);
 
-    std::string rdbPath = "/tmp/test_asm_export_propml.rdb";
+    std::string rdbPath = testTmpPath("test_asm_export_propml.rdb");
     rdb.saveAs(rdbPath);
 
     AsmExportConfig config;
     config.romPath = romPath;
     config.rdbPath = rdbPath;
-    config.outputDir = "/tmp/test_asm_export_propml";
+    config.outputDir = testTmpPath("test_asm_export_propml");
     config.origin = 0x0000;
 
     AsmExporter exporter(config);
@@ -1195,21 +1195,21 @@ TEST_BEGIN(rdb_property_value_stays_on_one_line)
         RdbObject plain = func;
         plain.properties.clear();
         bareRdb.addObject(plain);
-        std::string bareRdbPath = "/tmp/test_asm_export_propml_bare.rdb";
+        std::string bareRdbPath = testTmpPath("test_asm_export_propml_bare.rdb");
         bareRdb.saveAs(bareRdbPath);
 
         AsmExportConfig bareConfig;
         bareConfig.romPath = romPath;
         bareConfig.rdbPath = bareRdbPath;
-        bareConfig.outputDir = "/tmp/test_asm_export_propml_bare";
+        bareConfig.outputDir = testTmpPath("test_asm_export_propml_bare");
         bareConfig.origin = 0x0000;
         AsmExporter(bareConfig).run();
     }
 
     const char *rel[] = {"/code/code.asm", "/layout.asm"};
     for (const char *r : rel) {
-        std::string content = readWholeFile(std::string("/tmp/test_asm_export_propml") + r);
-        std::string bare = readWholeFile(std::string("/tmp/test_asm_export_propml_bare") + r);
+        std::string content = readWholeFile(testTmpPath("test_asm_export_propml") + r);
+        std::string bare = readWholeFile(testTmpPath("test_asm_export_propml_bare") + r);
         std::string msg =
             std::string(r) + ": the value costs exactly one extra line";
         CHECK(countLines(content) == countLines(bare) + 1, msg.c_str());
@@ -1268,18 +1268,18 @@ TEST_BEGIN(rdb_without_properties_output_unchanged)
         AsmExporter(config).run();
     };
 
-    exportWithProps(false, "/tmp/test_asm_export_prop_none");
-    exportWithProps(true,  "/tmp/test_asm_export_prop_nonstring");
+    exportWithProps(false, testTmpPath("test_asm_export_prop_none"));
+    exportWithProps(true,  testTmpPath("test_asm_export_prop_nonstring"));
 
     for (const std::string rel : {"/code/code.asm", "/layout.asm", "/main.asm"}) {
-        std::string a = readWholeFile("/tmp/test_asm_export_prop_none" + rel);
-        std::string b = readWholeFile("/tmp/test_asm_export_prop_nonstring" + rel);
+        std::string a = readWholeFile(testTmpPath("test_asm_export_prop_none") + rel);
+        std::string b = readWholeFile(testTmpPath("test_asm_export_prop_nonstring") + rel);
         CHECK(!a.empty(), ("file produced: " + rel).c_str());
         CHECK(a == b, ("non-String properties leave " + rel + " byte-identical").c_str());
     }
 
     // And the property-less listing has no property comments at all.
-    std::string code = readWholeFile("/tmp/test_asm_export_prop_none/code/code.asm");
+    std::string code = readWholeFile(testTmpPath("test_asm_export_prop_none/code/code.asm"));
     CHECK(linesContaining(code, "; ").size() >= 1, "comment line still present");
     CHECK(code.find("; frame_size") == std::string::npos &&
           code.find("; pure") == std::string::npos &&

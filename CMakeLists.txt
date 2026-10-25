@@ -1264,6 +1264,13 @@ target_link_libraries(v06c-debugger
     Threads::Threads
 )
 
+# Windows "Add/Remove \"Open with vector-debugger\"\" menu actions write the
+# Explorer context-menu verb under HKCU\\Software\\Classes (registry APIs live
+# in advapi32, which MinGW does not link by default). No-op on Linux.
+if(WIN32)
+    target_link_libraries(v06c-debugger advapi32)
+endif()
+
 # Binary resources produce absolute symbols (_binary_*_size) which cannot
 # be used with position-independent code on x86_64. Disable PIE for this target.
 if(NOT WIN32)

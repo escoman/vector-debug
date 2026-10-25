@@ -158,7 +158,15 @@ private:
     // surfaced through the same modal pattern as the ROM/WAV error buffers.
     char desktopMsgBuffer_[512] = "";
     bool desktopMsgError_ = false;
+    char statusTitle_[64] = "Install .desktop";  // title of the result popup
     void installDesktopFile();
+#ifdef _WIN32
+    // Windows equivalent of "Install .desktop": adds/removes an
+    // "Open with vector-debugger" verb to the Explorer context menu for ROM
+    // files via HKCU\Software\Classes (no admin rights required).
+    void installShellContextMenu();
+    void removeShellContextMenu();
+#endif
 
     // Recent ROMs — managed by ConfigManager
     void loadRomFile(const std::string &path, IDebugBackend &backend);

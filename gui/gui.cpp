@@ -14,6 +14,7 @@
 #include "backend.h"
 #include "events.h"
 #include "disassembler.h"
+#include "path_util.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -30,11 +31,39 @@
 // POSIX mkdir() takes a mode; MinGW's mkdir() (from io.h) takes only a path.
 // ---------------------------------------------------------------------------
 #ifdef _WIN32
+#include <windows.h>
 #include <direct.h>
 static int makeDir(const char* path) { return _mkdir(path); }
 #else
+#include <unistd.h>   // chdir() for setWorkingDirToExecutable()
 static int makeDir(const char* path) { return mkdir(path, 0755); }
 #endif
+
+// ---------------------------------------------------------------------------
+// Pin the process working directory to the executable's folder.
+//
+// The GUI loads relative resources (workspaces/, config.ini, the fonts/ fallback)
+// assuming the CWD *is* the executable directory. That holds when the app is
+// started by double-clicking it or from a shell already cd'd into that folder,
+// but NOT when Windows Explorer's "Open with..." (or a Linux .desktop Exec=)
+// launches it with a foreign CWD - those relative loads then silently miss and
+// the saved window layout (config.ini / workspace) is not restored. Chdir'ing
+// to SDL_GetBasePath() re-establishes the invariant regardless of how the
+// process was spawned. Env overrides (V06C_WORKSPACE_DIR / V06C_CONFIG_DIR,
+// used by the GUI smoke tests) still win because they are absolute.
+// ---------------------------------------------------------------------------
+static void setWorkingDirToExecutable()
+{
+    char* base = SDL_GetBasePath();   // exe directory, with a trailing separator
+    if (base && *base) {
+#ifdef _WIN32
+        _chdir(base);
+#else
+        chdir(base);
+#endif
+    }
+    SDL_free(base);
+}
 
 // ---------------------------------------------------------------------------
 // Resolve the bundled monospaced Unicode font.
@@ -89,6 +118,11 @@ bool DebuggerGui::initialize(int width, int height)
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
+
+    // Restore the "CWD == executable folder" invariant before any relative
+    // resource (workspaces/, config.ini, fonts/) is resolved below. See the
+    // helper's comment for why launching via Explorer/.desktop breaks it.
+    setWorkingDirToExecutable();
 
     // GL 2.1 context
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
@@ -376,10 +410,9 @@ void DebuggerGui::render(IDebugBackend &backend)
         std::string lastDir = configManager_.get("LastRomDirectory");
         romFileDialog_.onFileSelected = [this, &backend](const std::string &path) {
             // Save the directory of the selected ROM
-            size_t lastSlash = path.rfind('/');
-            if (lastSlash != std::string::npos) {
-                configManager_.set("LastRomDirectory",
-                    path.substr(0, lastSlash));
+            std::string dir = vpath::parentPath(path);
+            if (!dir.empty()) {
+                configManager_.set("LastRomDirectory", dir);
             }
             loadRomFile(path, backend);
         };
@@ -392,10 +425,9 @@ void DebuggerGui::render(IDebugBackend &backend)
         std::string lastDir = configManager_.get("LastRomDirectory");
         romFileDialog_.onFileSelected = [this, &backend](const std::string &path) {
             // Save the directory of the selected WAV
-            size_t lastSlash = path.rfind('/');
-            if (lastSlash != std::string::npos) {
-                configManager_.set("LastRomDirectory",
-                    path.substr(0, lastSlash));
+            std::string dir = vpath::parentPath(path);
+            if (!dir.empty()) {
+                configManager_.set("LastRomDirectory", dir);
             }
             loadWavFile(path, backend);
         };
@@ -427,11 +459,14 @@ void DebuggerGui::render(IDebugBackend &backend)
         ImGui::EndPopup();
     }
 
-    // "Install .desktop" result (success or error), same modal pattern.
+    // Shell/desktop integration result (success or error), same modal
+    // pattern. statusTitle_ is set by the action that opened it, so the same
+    // popup serves "Install .desktop" (POSIX) and the Windows context-menu
+    // install/remove.
     if (desktopMsgBuffer_[0]) {
-        ImGui::OpenPopup("Install .desktop");
+        ImGui::OpenPopup(statusTitle_);
     }
-    if (ImGui::BeginPopupModal("Install .desktop", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(statusTitle_, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextColored(desktopMsgError_ ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f)
                                             : ImVec4(0.3f, 1.0f, 0.4f, 1.0f),
                            "%s", desktopMsgBuffer_);
@@ -776,12 +811,8 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             if (!recentRoms.empty()) {
                 ImGui::Separator();
                 for (size_t i = 0; i < recentRoms.size(); ++i) {
-                    // Extract filename from full path
-                    std::string displayName = recentRoms[i];
-                    size_t lastSlash = displayName.rfind('/');
-                    if (lastSlash != std::string::npos) {
-                        displayName = displayName.substr(lastSlash + 1);
-                    }
+                    // Extract filename from full path (platform-aware)
+                    std::string displayName = vpath::basename(recentRoms[i]);
                     char label[512];
                     snprintf(label, sizeof(label), "%d. %s", (int)(i + 1),
                              displayName.c_str());
@@ -791,9 +822,18 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
                 }
             }
             ImGui::Separator();
+#ifdef _WIN32
+            if (ImGui::MenuItem("Add \"Open with vector-debugger\"")) {
+                installShellContextMenu();
+            }
+            if (ImGui::MenuItem("Remove \"Open with vector-debugger\"")) {
+                removeShellContextMenu();
+            }
+#else
             if (ImGui::MenuItem("Install .desktop")) {
                 installDesktopFile();
             }
+#endif
             if (ImGui::MenuItem("Exit")) {
                 quit_ = true;
             }
@@ -1168,10 +1208,8 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
     uint32_t org = 0;
     backend.requestPause();
     if (backend.loadRom(romPath, org)) {
-        // Extract filename from path
-        size_t lastSlash = romPath.rfind('/');
-        currentRomName_ = (lastSlash != std::string::npos)
-            ? romPath.substr(lastSlash + 1) : romPath;
+        // Extract filename from path (platform-aware)
+        currentRomName_ = vpath::basename(romPath);
         // Add to recent ROMs list (ConfigManager handles persistence)
         configManager_.addRecentRom(romPath);
         memoryInspector_.requestRefresh();
@@ -1192,14 +1230,13 @@ void DebuggerGui::adoptCommandLineRom(const std::string &path)
     // existed; here we only do the GUI-side bookkeeping so a command-line /
     // "Open with..." launch looks identical to the "Open ROM..." menu: show
     // the filename in the toolbar and record it in the Recent ROMs list.
-    size_t lastSlash = path.rfind('/');
-    currentRomName_ = (lastSlash != std::string::npos)
-        ? path.substr(lastSlash + 1) : path;
+    currentRomName_ = vpath::basename(path);
     configManager_.addRecentRom(path);
 }
 
 void DebuggerGui::installDesktopFile()
 {
+    snprintf(statusTitle_, sizeof(statusTitle_), "Install .desktop");
     desktopMsgBuffer_[0] = '\0';
     desktopMsgError_ = false;
 
@@ -1264,13 +1301,133 @@ void DebuggerGui::installDesktopFile()
     }
 }
 
+#ifdef _WIN32
+// ---------------------------------------------------------------------------
+// Windows equivalent of "Install .desktop": register an "Open with
+// vector-debugger" verb in the Explorer context menu for ROM files. Keys are
+// written under HKEY_CURRENT_USER\Software\Classes so no elevation is needed,
+// and the hand-off reuses the same argv[1] ROM path the launcher already
+// understands (see main.cpp resolveLaunchPath).
+// ---------------------------------------------------------------------------
+namespace {
+
+// Extensions that get the verb (the only ROM types the debugger opens). The
+// verb is written under the per-extension key, so the entry never shows for
+// other file types. Registry keys are matched case-insensitively, so ".rom"
+// already covers ".ROM"/".Rom"/etc. Do NOT add upper-case duplicates: they
+// resolve to the same key and would only create noise.
+const char* const kShellExtensions[] = { ".rom", ".r0m" };
+const char* const kShellVerbKey = "vector-debugger";
+
+std::string shellVerbRoot(const char* ext)
+{
+    return std::string("Software\\Classes\\") + ext + "\\shell\\" + kShellVerbKey;
+}
+
+bool writeShellVerb(const char* ext, const std::string& exePath)
+{
+    const std::string shellKey = shellVerbRoot(ext);
+    const std::string cmdKey   = shellKey + "\\command";
+
+    HKEY hShell = nullptr;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, shellKey.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &hShell, nullptr) != ERROR_SUCCESS)
+        return false;
+    const char* verb = "Open with vector-debugger";
+    RegSetValueExA(hShell, nullptr, 0, REG_SZ,
+                   reinterpret_cast<const BYTE*>(verb),
+                   static_cast<DWORD>(strlen(verb) + 1));
+    RegCloseKey(hShell);
+
+    HKEY hCmd = nullptr;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, cmdKey.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &hCmd, nullptr) != ERROR_SUCCESS)
+        return false;
+    const std::string command = "\"" + exePath + "\" \"%1\"";
+    RegSetValueExA(hCmd, nullptr, 0, REG_SZ,
+                   reinterpret_cast<const BYTE*>(command.c_str()),
+                   static_cast<DWORD>(command.size() + 1));
+    RegCloseKey(hCmd);
+    return true;
+}
+
+}  // namespace
+
+void DebuggerGui::installShellContextMenu()
+{
+    snprintf(statusTitle_, sizeof(statusTitle_), "Shell context menu");
+    desktopMsgBuffer_[0] = '\0';
+    desktopMsgError_ = false;
+
+    // Full path to this executable. A generous buffer avoids the MAX_PATH
+    // truncation that would corrupt the registered command line.
+    char exeBuf[32768];
+    DWORD n = GetModuleFileNameA(nullptr, exeBuf, static_cast<DWORD>(sizeof(exeBuf)));
+    if (n == 0 || n >= sizeof(exeBuf)) {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Cannot resolve the executable path (error %lu).", GetLastError());
+        desktopMsgError_ = true;
+        return;
+    }
+    const std::string exePath(exeBuf, n);
+
+    int ok = 0;
+    for (const char* ext : kShellExtensions)
+        if (writeShellVerb(ext, exePath)) ++ok;
+
+    if (ok > 0) {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Added \"Open with vector-debugger\" to the Explorer context\n"
+                 "menu for .rom/.r0m files.\n\nCommand:\n\"%s\" \"%%1\"",
+                 exePath.c_str());
+    } else {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Failed to write HKCU\\Software\\Classes (error %lu).",
+                 GetLastError());
+        desktopMsgError_ = true;
+    }
+}
+
+void DebuggerGui::removeShellContextMenu()
+{
+    snprintf(statusTitle_, sizeof(statusTitle_), "Shell context menu");
+    desktopMsgBuffer_[0] = '\0';
+    desktopMsgError_ = false;
+
+    int removed = 0;
+    bool failed = false;
+    for (const char* ext : kShellExtensions) {
+        // RegDeleteTreeA removes the verb key and its \command subtree.
+        LSTATUS st = RegDeleteTreeA(HKEY_CURRENT_USER, shellVerbRoot(ext).c_str());
+        if (st == ERROR_SUCCESS) {
+            ++removed;
+        } else if (st != ERROR_FILE_NOT_FOUND) {
+            failed = true;
+        }
+    }
+
+    if (removed > 0) {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Removed \"Open with vector-debugger\" from the Explorer\n"
+                 "context menu for %d extension(s).", removed);
+    } else if (failed) {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Failed to remove the context menu entries (error %lu).",
+                 GetLastError());
+        desktopMsgError_ = true;
+    } else {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "No \"Open with vector-debugger\" entries were installed -\n"
+                 "nothing to remove.");
+    }
+}
+#endif  // _WIN32
+
 void DebuggerGui::loadWavFile(const std::string &path, IDebugBackend &backend)
 {
     if (backend.loadWav(path)) {
-        // Extract filename from path
-        size_t lastSlash = path.rfind('/');
-        currentRomName_ = (lastSlash != std::string::npos)
-            ? path.substr(lastSlash + 1) : path;
+        // Extract filename from path (platform-aware)
+        currentRomName_ = vpath::basename(path);
 
         // Reset with boot ROM and start emulation
         // Press F1 to switch bootloader to tape mode

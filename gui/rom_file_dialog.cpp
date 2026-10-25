@@ -1,4 +1,5 @@
 #include "rom_file_dialog.h"
+#include "path_util.h"
 
 // Dear ImGui
 #include "imgui.h"
@@ -44,9 +45,9 @@ void RomFileDialog::show(const std::string &startDir,
         if (getcwd(cwd, sizeof(cwd))) {
             currentPath_ = cwd;
         } else {
-            currentPath_ = "/";
+            currentPath_ = vpath::PATH_ROOT;
         }
-    } else if (startDir[0] != '/') {
+    } else if (!vpath::isAbsolute(startDir)) {
         // Resolve relative path to absolute
         char resolved[PATH_MAX];
         if (resolveRealPath(startDir.c_str(), resolved)) {
@@ -149,10 +150,7 @@ bool RomFileDialog::render()
 
                 // Double-click on directory: navigate into it
                 if (entry.isDir && ImGui::IsMouseDoubleClicked(0)) {
-                    std::string newPath = currentPath_;
-                    if (newPath.back() != '/') newPath += '/';
-                    newPath += entry.name;
-                    navigateTo(newPath);
+                    navigateTo(vpath::join(currentPath_, entry.name));
                 }
                 // Double-click on file: select it
                 else if (!entry.isDir && ImGui::IsMouseDoubleClicked(0)) {
@@ -190,13 +188,11 @@ bool RomFileDialog::render()
             if (!(saveMode_ && filenameInput_[0] == '\0')) {
                 // Build full path
                 std::string fullPath;
-                if (filenameInput_[0] == '/') {
+                if (vpath::isAbsolute(filenameInput_)) {
                     // Absolute path
                     fullPath = filenameInput_;
                 } else {
-                    fullPath = currentPath_;
-                    if (fullPath.back() != '/') fullPath += '/';
-                    fullPath += filenameInput_;
+                    fullPath = vpath::join(currentPath_, filenameInput_);
                 }
                 // Save mode: append the default extension when the name has none.
                 if (saveMode_ && !matchesExtensions(fullPath) && !extensions_.empty()) {
@@ -286,9 +282,7 @@ void RomFileDialog::refreshEntries()
         if (name.empty() || name[0] == '.') continue;
 
         // Build full path for stat
-        std::string fullPath = currentPath_;
-        if (fullPath.back() != '/') fullPath += '/';
-        fullPath += name;
+        std::string fullPath = vpath::join(currentPath_, name);
 
         struct stat st;
         if (stat(fullPath.c_str(), &st) != 0) continue;
@@ -329,27 +323,15 @@ void RomFileDialog::navigateTo(const std::string &path)
 
 void RomFileDialog::goUp()
 {
-    // Find last slash
-    size_t lastSlash = currentPath_.rfind('/');
-    if (lastSlash == std::string::npos || lastSlash == 0) {
-        // Already at root or no slash found
+    // Platform-aware parent lookup: handles '/' on POSIX and both '/' and '\'
+    // on Windows, stopping at the filesystem root ("/" or "C:\").
+    std::string parent = vpath::parentPath(currentPath_);
+    if (parent.empty()) {
+        // Already at the root - stay where we are.
         return;
     }
 
-    // Remove trailing slash if present
-    std::string path = currentPath_;
-    if (path.back() == '/') {
-        path.pop_back();
-        lastSlash = path.rfind('/');
-        if (lastSlash == std::string::npos) {
-            currentPath_ = "/";
-        } else {
-            currentPath_ = path.substr(0, lastSlash);
-        }
-    } else {
-        currentPath_ = path.substr(0, lastSlash);
-    }
-
+    currentPath_ = parent;
     needsRefresh_ = true;
     filenameInput_[0] = '\0';
 }

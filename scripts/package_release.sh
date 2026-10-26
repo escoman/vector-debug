@@ -85,6 +85,12 @@ if [ -d "$ROOT/res/fonts" ]; then
   cp "$ROOT"/res/fonts/*.ttf "$STAGE/fonts/" 2>/dev/null || true
 fi
 
+# Ship the About/splash logo next to the executables — it is NOT embedded in the
+# binary; the GUI loads it at runtime via SDL_GetBasePath()+"logo16.png"
+# (see AboutWindow::resolveLogoPath). Without this copy the release bundle shows
+# the About window with a placeholder box instead of the logo.
+[ -f "$ROOT/res/logo16.png" ] && cp "$ROOT/res/logo16.png" "$STAGE/" || true
+
 # Linux: bundle a relocatable .desktop launcher + icon. The build-time CMake
 # version embeds absolute /build paths; rewrite Exec to resolve against the
 # .desktop file itself (%k field code) and use a theme Icon name instead of an

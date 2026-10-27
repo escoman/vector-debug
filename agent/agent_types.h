@@ -256,6 +256,10 @@ namespace AgentLimits {
     // -- Hardware interrupt (RST 7 / INT) event limits ----------------------
     static const size_t MAX_INTERRUPT_EVENTS            = 50000;   // ring capacity
     static const size_t INTERRUPT_EVENTS_DEFAULT_LIMIT  = 1000;    // default per-query cap
+    // -- Stage 6.28: RDB knowledge-section query limits ---------------------
+    static const size_t MAX_PROTOCOL_ENTRIES_DEFAULT    = 200;     // per-query cap
+    static const size_t MAX_PROTOCOL_ENTRIES_HARD       = 10000;   // requested cap ceiling
+    static const size_t MAX_PORT_BITS                   = 8;       // bits per port entry
 }
 
 // ---------------------------------------------------------------------------
@@ -666,6 +670,10 @@ struct RdbInfoResult
     std::string romFile;
     uint64_t    romSize = 0;
     std::string romSha256;
+    // -- Stage 6.28 knowledge-section counts ------------------------------
+    size_t      protocolCount = 0;
+    size_t      portCount = 0;
+    size_t      watchCount = 0;
 };
 
 struct RdbObjectResult
@@ -678,6 +686,54 @@ struct RdbObjectResult
     std::string comment;
     std::vector<uint16_t> links;
     std::map<std::string, std::string> properties;  // simplified: all as strings
+};
+
+// ---------------------------------------------------------------------------
+// Stage 6.28 — RDB knowledge-section results (JSON-ready, string enums)
+// ---------------------------------------------------------------------------
+
+struct RdbProtocolResult
+{
+    std::string id;
+    std::string timestamp;
+    std::string thesis;
+    std::string status;      // "VERIFIED_BY_TRACE", ...
+    std::string scope;       // "rom" / "hardware" / "tooling"
+    bool        hasAddress = false;
+    uint16_t    address = 0;
+    bool        hasMethod = false;
+    std::string method;      // "trace" / "diff" / ...
+    std::string evidence;
+    std::vector<std::string> links;
+    std::string supersedes;      // empty = none
+    std::string supersededBy;    // empty = active
+};
+
+// Input port-bit descriptor (index + meaning). Used by upsertPort.
+struct RdbPortBitInput
+{
+    int         index = 0;
+    std::string meaning;
+};
+
+struct RdbPortResult
+{
+    uint8_t     port = 0;
+    std::string name;
+    std::string direction;   // "input" / "output" / "in-out"
+    std::string polarity;    // "active-high" / "active-low" / "n/a"
+    std::vector<RdbPortBitInput> bits;
+    std::string comment;
+};
+
+struct RdbWatchResult
+{
+    std::string name;
+    uint16_t    address = 0;
+    uint32_t    length = 1;
+    std::string format;
+    bool        hasObjectAddress = false;
+    uint16_t    objectAddress = 0;
 };
 
 // ---------------------------------------------------------------------------

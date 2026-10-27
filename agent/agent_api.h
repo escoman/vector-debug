@@ -293,6 +293,49 @@ public:
 
     AgentApiResult<std::vector<uint16_t>> getRdbLinks(uint16_t sourceAddress);
 
+    // -- RDB Knowledge sections (Stage 6.28) --------------------------------
+    // protocol / ports / watchlist. Strings are parsed into the RDB enums;
+    // an unknown enum string -> InvalidArgument, a confirmed/refuted entry
+    // without method+evidence -> InvalidArgument (the §4.4 evidence rule).
+
+    AgentApiResult<RdbProtocolResult> addProtocolEntry(
+        const std::string &thesis, const std::string &status, const std::string &scope,
+        bool hasAddress, uint16_t address,
+        const std::string &method /* "" = none */, const std::string &evidence);
+
+    AgentApiResult<RdbProtocolResult> supersedeProtocolEntry(
+        const std::string &supersededId,
+        const std::string &thesis, const std::string &status, const std::string &scope,
+        bool hasAddress, uint16_t address,
+        const std::string &method, const std::string &evidence);
+
+    AgentApiResult<std::vector<RdbProtocolResult>> getProtocol(
+        const std::string &substring, const std::string &status /* "" = any */,
+        const std::string &scope /* "" = any */,
+        bool hasAddress, uint16_t address,
+        bool activeOnly, size_t maxEntries);
+
+    AgentApiResult<void> updateProtocolStatus(
+        const std::string &id, const std::string &status,
+        const std::string &method /* "" = none */, const std::string &evidence);
+
+    AgentApiResult<void> removeProtocolEntry(const std::string &id);
+
+    AgentApiResult<RdbPortResult> upsertPort(
+        uint8_t port, const std::string &name,
+        const std::string &direction, const std::string &polarity,
+        const std::vector<RdbPortBitInput> &bits, const std::string &comment);
+
+    AgentApiResult<std::vector<RdbPortResult>> getPorts();
+
+    AgentApiResult<RdbWatchResult> addWatchEntry(
+        const std::string &name, uint16_t address, uint32_t length,
+        const std::string &format, bool hasObjectAddress, uint16_t objectAddress);
+
+    AgentApiResult<void> removeWatchEntry(const std::string &name);
+
+    AgentApiResult<std::vector<RdbWatchResult>> listWatch();
+
     // -- Agent log -----------------------------------------------------------
 
     const AgentLog &log() const;

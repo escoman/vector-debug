@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -27,6 +28,12 @@ struct RdbController::Impl
 
     // Objects indexed by address
     std::map<uint16_t, RdbObject> objects;
+
+    // -- Stage 6.28 knowledge sections -------------------------------------
+    std::vector<RdbProtocolEntry> protocol;          // insertion order preserved
+    std::map<uint8_t, RdbPortEntry> ports;
+    std::map<std::string, RdbWatchEntry> watch;      // keyed by name (unique)
+    int nextProtocolId = 1;                           // P-NNNN counter
 };
 
 // ---------------------------------------------------------------------------
@@ -178,13 +185,208 @@ static RdbObject objectFromJson(const json &j)
     return obj;
 }
 
+// ---------------------------------------------------------------------------
+// Stage 6.28 — knowledge-section JSON + id/timestamp helpers
+// ---------------------------------------------------------------------------
+
+// Current UTC time as ISO-8601 "YYYY-MM-DDTHH:MM:SSZ".
+static std::string nowIso8601()
+{
+    std::time_t t = std::time(nullptr);
+    std::tm tmv{};
+#if defined(_WIN32)
+    gmtime_s(&tmv, &t);
+#else
+    gmtime_r(&t, &tmv);
+#endif
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    return buf;
+}
+
+static std::string protoId(int n)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "P-%04d", n);
+    return buf;
+}
+
+// Highest P-NNNN suffix already present, for counter resume after load.
+static int scanMaxProtoId(const std::vector<RdbProtocolEntry> &entries)
+{
+    int maxn = 0;
+    for (const auto &e : entries) {
+        if (e.id.size() >= 6 && e.id.rfind("P-", 0) == 0) {
+            int n = atoi(e.id.c_str() + 2);
+            if (n > maxn) maxn = n;
+        }
+    }
+    return maxn;
+}
+
+static json portBitToJson(const RdbPortBit &b)
+{
+    json j;
+    j["index"]   = b.index;
+    j["meaning"] = normalizeRdbText(b.meaning);
+    return j;
+}
+
+static json protocolToJson(const RdbProtocolEntry &e)
+{
+    json j;
+    j["id"]        = e.id;
+    j["timestamp"] = e.timestamp;
+    j["thesis"]    = normalizeRdbText(e.thesis);
+    j["status"]    = protocolStatusToString(e.status);
+    j["scope"]     = protocolScopeToString(e.scope);
+    if (e.hasAddress) j["address"] = addrToHex(e.address);
+    if (e.hasMethod)  j["method"]  = protocolMethodToString(e.method);
+    std::string ev = normalizeRdbText(e.evidence);
+    if (!ev.empty()) j["evidence"] = ev;
+    if (!e.links.empty()) {
+        j["links"] = e.links;
+    }
+    if (!e.supersedes.empty())   j["supersedes"]   = e.supersedes;
+    if (!e.supersededBy.empty()) j["superseded_by"] = e.supersededBy;
+    return j;
+}
+
+static RdbProtocolEntry protocolFromJson(const json &j)
+{
+    RdbProtocolEntry e;
+    if (j.contains("id") && j["id"].is_string())        e.id = j["id"].get<std::string>();
+    if (j.contains("timestamp") && j["timestamp"].is_string())
+        e.timestamp = j["timestamp"].get<std::string>();
+    if (j.contains("thesis") && j["thesis"].is_string())
+        e.thesis = normalizeRdbText(j["thesis"].get<std::string>());
+    if (j.contains("status") && j["status"].is_string())
+        parseProtocolStatus(j["status"].get<std::string>(), e.status);
+    if (j.contains("scope") && j["scope"].is_string())
+        parseProtocolScope(j["scope"].get<std::string>(), e.scope);
+    if (j.contains("address") && j["address"].is_string()) {
+        uint16_t a = 0;
+        if (hexToAddr(j["address"].get<std::string>(), a)) {
+            e.address = a; e.hasAddress = true;
+        }
+    }
+    if (j.contains("method") && j["method"].is_string()) {
+        ProtocolMethod m;
+        if (parseProtocolMethod(j["method"].get<std::string>(), m)) {
+            e.method = m; e.hasMethod = true;
+        }
+    }
+    if (j.contains("evidence") && j["evidence"].is_string())
+        e.evidence = normalizeRdbText(j["evidence"].get<std::string>());
+    if (j.contains("links") && j["links"].is_array())
+        for (const auto &l : j["links"])
+            if (l.is_string()) e.links.push_back(l.get<std::string>());
+    if (j.contains("supersedes") && j["supersedes"].is_string())
+        e.supersedes = j["supersedes"].get<std::string>();
+    if (j.contains("superseded_by") && j["superseded_by"].is_string())
+        e.supersededBy = j["superseded_by"].get<std::string>();
+    return e;
+}
+
+static json portToJson(const RdbPortEntry &p)
+{
+    json j;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "0x%02X", p.port);
+    j["port"] = buf;
+    if (!p.name.empty()) j["name"] = normalizeRdbText(p.name);
+    j["direction"] = portDirectionToString(p.direction);
+    j["polarity"]  = portPolarityToString(p.polarity);
+    if (!p.bits.empty()) {
+        json bits = json::array();
+        for (const auto &b : p.bits) bits.push_back(portBitToJson(b));
+        j["bits"] = bits;
+    }
+    std::string c = normalizeRdbText(p.comment);
+    if (!c.empty()) j["comment"] = c;
+    return j;
+}
+
+static RdbPortEntry portFromJson(const json &j)
+{
+    RdbPortEntry p;
+    if (j.contains("port") && j["port"].is_string()) {
+        unsigned int v = 0;
+        std::string s = j["port"].get<std::string>();
+        if (s.size() && s[0] == '0' && (s.size() > 1 && (s[1] == 'x' || s[1] == 'X'))) s = s.substr(2);
+        if (sscanf(s.c_str(), "%x", &v) == 1) p.port = static_cast<uint8_t>(v & 0xFF);
+    }
+    if (j.contains("name") && j["name"].is_string())
+        p.name = normalizeRdbText(j["name"].get<std::string>());
+    if (j.contains("direction") && j["direction"].is_string())
+        parsePortDirection(j["direction"].get<std::string>(), p.direction);
+    if (j.contains("polarity") && j["polarity"].is_string())
+        parsePortPolarity(j["polarity"].get<std::string>(), p.polarity);
+    if (j.contains("bits") && j["bits"].is_array()) {
+        for (const auto &bj : j["bits"]) {
+            if (!bj.is_object()) continue;
+            RdbPortBit b;
+            if (bj.contains("index") && bj["index"].is_number())
+                b.index = bj["index"].get<int>();
+            if (bj.contains("meaning") && bj["meaning"].is_string())
+                b.meaning = normalizeRdbText(bj["meaning"].get<std::string>());
+            p.bits.push_back(b);
+        }
+    }
+    if (j.contains("comment") && j["comment"].is_string())
+        p.comment = normalizeRdbText(j["comment"].get<std::string>());
+    return p;
+}
+
+static json watchToJson(const RdbWatchEntry &w)
+{
+    json j;
+    j["name"]    = normalizeRdbText(w.name);
+    j["address"] = addrToHex(w.address);
+    j["length"]  = w.length;
+    j["format"]  = w.format;
+    if (w.hasObjectAddress) j["object_address"] = addrToHex(w.objectAddress);
+    return j;
+}
+
+static RdbWatchEntry watchFromJson(const json &j)
+{
+    RdbWatchEntry w;
+    if (j.contains("name") && j["name"].is_string())
+        w.name = normalizeRdbText(j["name"].get<std::string>());
+    if (j.contains("address") && j["address"].is_string())
+        hexToAddr(j["address"].get<std::string>(), w.address);
+    if (j.contains("length") && j["length"].is_number())
+        w.length = j["length"].get<uint32_t>();
+    if (j.contains("format") && j["format"].is_string())
+        w.format = j["format"].get<std::string>();
+    if (j.contains("object_address") && j["object_address"].is_string()) {
+        uint16_t a = 0;
+        if (hexToAddr(j["object_address"].get<std::string>(), a)) {
+            w.objectAddress = a; w.hasObjectAddress = true;
+        }
+    }
+    return w;
+}
+
+// ---------------------------------------------------------------------------
+// Full-document (de)serialization
+// ---------------------------------------------------------------------------
+
 // Serialize the full RDB to JSON
 static json rdbToJson(const RdbController::Impl &impl)
 {
     json root;
     root["format"] = "rdb";
     root["platform"] = impl.platform;
-    root["version"] = impl.version;
+
+    // Effective version: bump to 2 only when a knowledge section is present,
+    // otherwise preserve the loaded version so untouched v1 files stay v1.
+    bool hasKnowledge = !impl.protocol.empty() || !impl.ports.empty() || !impl.watch.empty();
+    int outVersion = hasKnowledge ? std::max(impl.version, 2) : impl.version;
+    root["version"] = outVersion;
 
     if (impl.romIdentity.isComplete()) {
         json rom;
@@ -199,6 +401,31 @@ static json rdbToJson(const RdbController::Impl &impl)
         objectsArr.push_back(objectToJson(kv.second));
     }
     root["objects"] = objectsArr;
+
+    // -- Stage 6.28 knowledge sections (only written when non-empty) --------
+    if (!impl.protocol.empty()) {
+        json arr = json::array();
+        for (const auto &e : impl.protocol) arr.push_back(protocolToJson(e));
+        root["protocol"] = arr;
+    }
+    if (!impl.ports.empty()) {
+        json arr = json::array();
+        for (const auto &kv : impl.ports) arr.push_back(portToJson(kv.second));
+        root["ports"] = arr;
+    }
+    if (!impl.watch.empty()) {
+        json arr = json::array();
+        // Deterministic order: sort by address, then name.
+        std::vector<RdbWatchEntry> ws;
+        ws.reserve(impl.watch.size());
+        for (const auto &kv : impl.watch) ws.push_back(kv.second);
+        std::sort(ws.begin(), ws.end(), [](const RdbWatchEntry &a, const RdbWatchEntry &b) {
+            if (a.address != b.address) return a.address < b.address;
+            return a.name < b.name;
+        });
+        for (const auto &w : ws) arr.push_back(watchToJson(w));
+        root["watchlist"] = arr;
+    }
 
     return root;
 }
@@ -217,6 +444,12 @@ static bool rdbFromJson(const json &root, RdbController::Impl &impl)
 
     if (root.contains("version") && root["version"].is_number()) {
         impl.version = root["version"].get<int>();
+    }
+
+    // Stage 6.28: accept v1 (no knowledge sections) and v2; reject unknown
+    // future versions rather than silently mis-parsing them.
+    if (impl.version > 2) {
+        return false;
     }
 
     // ROM identity
@@ -239,6 +472,34 @@ static bool rdbFromJson(const json &root, RdbController::Impl &impl)
         for (const auto &objJson : root["objects"]) {
             RdbObject obj = objectFromJson(objJson);
             impl.objects[obj.address] = obj;
+        }
+    }
+
+    // -- Stage 6.28 knowledge sections (v1 files simply omit them) ---------
+    impl.protocol.clear();
+    if (root.contains("protocol") && root["protocol"].is_array()) {
+        for (const auto &ej : root["protocol"]) {
+            if (!ej.is_object()) continue;
+            impl.protocol.push_back(protocolFromJson(ej));
+        }
+    }
+    impl.nextProtocolId = scanMaxProtoId(impl.protocol) + 1;
+
+    impl.ports.clear();
+    if (root.contains("ports") && root["ports"].is_array()) {
+        for (const auto &pj : root["ports"]) {
+            if (!pj.is_object()) continue;
+            RdbPortEntry p = portFromJson(pj);
+            impl.ports[p.port] = p;
+        }
+    }
+
+    impl.watch.clear();
+    if (root.contains("watchlist") && root["watchlist"].is_array()) {
+        for (const auto &wj : root["watchlist"]) {
+            if (!wj.is_object()) continue;
+            RdbWatchEntry w = watchFromJson(wj);
+            if (!w.name.empty()) impl.watch[w.name] = w;
         }
     }
 
@@ -277,6 +538,10 @@ bool RdbController::load(const std::string &path)
         impl_->objects.clear();
         if (!rdbFromJson(root, *impl_)) {
             impl_->objects.clear();
+            impl_->protocol.clear();
+            impl_->ports.clear();
+            impl_->watch.clear();
+            impl_->nextProtocolId = 1;
             return false;
         }
 
@@ -287,6 +552,10 @@ bool RdbController::load(const std::string &path)
         return true;
     } catch (const std::exception &) {
         impl_->objects.clear();
+        impl_->protocol.clear();
+        impl_->ports.clear();
+        impl_->watch.clear();
+        impl_->nextProtocolId = 1;
         return false;
     }
 }
@@ -371,6 +640,10 @@ void RdbController::close()
     impl_->dirty = false;
     impl_->fileExistsOnDisk = false;
     impl_->objects.clear();
+    impl_->protocol.clear();
+    impl_->ports.clear();
+    impl_->watch.clear();
+    impl_->nextProtocolId = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -656,3 +929,236 @@ void RdbController::initialize(const std::string &platform,
     impl_->loaded = true;
     // dirty remains false — in-memory only until modified
 }
+
+// ---------------------------------------------------------------------------
+// Protocol journal (Stage 6.28)
+// ---------------------------------------------------------------------------
+
+// Evidence rule (§4.4): a VERIFIED*/CONFLICT/REFUTED status must carry a valid
+// method and a non-empty evidence string. Returns MissingEvidence otherwise.
+static RdbOpResult validateProtocolEvidence(const RdbProtocolEntry &e)
+{
+    if (e.thesis.empty()) return RdbOpResult::InvalidThesis;
+    if (protocolStatusRequiresEvidence(e.status)) {
+        if (!e.hasMethod || e.evidence.empty())
+            return RdbOpResult::MissingEvidence;
+    }
+    return RdbOpResult::None;
+}
+
+RdbOpResult RdbController::addProtocolEntry(RdbProtocolEntry &entry)
+{
+    entry.thesis   = normalizeRdbText(entry.thesis);
+    entry.evidence = normalizeRdbText(entry.evidence);
+
+    RdbOpResult v = validateProtocolEvidence(entry);
+    if (v != RdbOpResult::None) return v;
+
+    entry.id        = protoId(impl_->nextProtocolId++);
+    entry.timestamp = nowIso8601();
+    entry.supersededBy.clear();   // a fresh entry is never already superseded
+
+    impl_->protocol.push_back(entry);
+    impl_->dirty = true;
+    return RdbOpResult::None;
+}
+
+RdbOpResult RdbController::supersedeProtocolEntry(const std::string &supersededId,
+                                                  RdbProtocolEntry &newEntry,
+                                                  std::string &outNewId)
+{
+    // Locate the target by index (a pointer would be invalidated by the
+    // push_back inside addProtocolEntry below).
+    size_t targetIdx = impl_->protocol.size();
+    for (size_t i = 0; i < impl_->protocol.size(); ++i) {
+        if (impl_->protocol[i].id == supersededId) { targetIdx = i; break; }
+    }
+    if (targetIdx == impl_->protocol.size()) return RdbOpResult::NotFound;
+
+    RdbOpResult r = addProtocolEntry(newEntry);
+    if (r != RdbOpResult::None) return r;
+
+    // addProtocolEntry assigned id/timestamp; wire the back-references.
+    newEntry.supersedes = supersededId;
+    impl_->protocol.back().supersedes = supersededId;
+    impl_->protocol[targetIdx].supersededBy = newEntry.id;
+
+    outNewId = newEntry.id;
+    return RdbOpResult::None;
+}
+
+RdbOpResult RdbController::updateProtocolStatus(const std::string &id,
+                                                ProtocolStatus status,
+                                                bool hasMethod, ProtocolMethod method,
+                                                const std::string &evidence)
+{
+    for (auto &e : impl_->protocol) {
+        if (e.id != id) continue;
+
+        RdbProtocolEntry candidate = e;
+        candidate.status    = status;
+        candidate.hasMethod = hasMethod;
+        candidate.method    = method;
+        candidate.evidence  = normalizeRdbText(evidence);
+
+        RdbOpResult v = validateProtocolEvidence(candidate);
+        if (v != RdbOpResult::None) return v;
+
+        if (candidate.status    == e.status    &&
+            candidate.hasMethod == e.hasMethod &&
+            candidate.method    == e.method    &&
+            candidate.evidence  == e.evidence) {
+            return RdbOpResult::None;   // no change
+        }
+
+        e.status    = candidate.status;
+        e.hasMethod = candidate.hasMethod;
+        e.method    = candidate.method;
+        e.evidence  = candidate.evidence;
+        impl_->dirty = true;
+        return RdbOpResult::None;
+    }
+    return RdbOpResult::NotFound;
+}
+
+RdbOpResult RdbController::removeProtocolEntry(const std::string &id)
+{
+    auto it = std::find_if(impl_->protocol.begin(), impl_->protocol.end(),
+                           [&](const RdbProtocolEntry &e) { return e.id == id; });
+    if (it == impl_->protocol.end()) return RdbOpResult::NotFound;
+
+    // Refuse to delete an entry another active entry supersedes.
+    for (const auto &e : impl_->protocol) {
+        if (e.supersedes == id) return RdbOpResult::Referenced;
+    }
+
+    impl_->protocol.erase(it);
+    impl_->dirty = true;
+    return RdbOpResult::None;
+}
+
+const RdbProtocolEntry *RdbController::findProtocolEntry(const std::string &id) const
+{
+    for (const auto &e : impl_->protocol) {
+        if (e.id == id) return &e;
+    }
+    return nullptr;
+}
+
+std::vector<RdbProtocolEntry> RdbController::getProtocol(const ProtocolFilter &filter) const
+{
+    const std::string needle = rdb_detail::toLower(filter.substring);
+
+    std::vector<RdbProtocolEntry> result;
+    for (const auto &e : impl_->protocol) {
+        if (filter.activeOnly && e.isSuperseded()) continue;
+        if (filter.hasStatus && e.status != filter.status) continue;
+        if (filter.hasScope  && e.scope  != filter.scope)  continue;
+        if (filter.hasAddress && (!e.hasAddress || e.address != filter.address)) continue;
+        if (!needle.empty()) {
+            if (rdb_detail::toLower(e.thesis).find(needle) == std::string::npos)
+                continue;
+        }
+        result.push_back(e);
+        if (filter.maxEntries > 0 && result.size() >= filter.maxEntries) break;
+    }
+    return result;
+}
+
+size_t RdbController::protocolCount() const { return impl_->protocol.size(); }
+
+// ---------------------------------------------------------------------------
+// Ports table (Stage 6.28)
+// ---------------------------------------------------------------------------
+
+RdbOpResult RdbController::upsertPort(const RdbPortEntry &port)
+{
+    RdbPortEntry stored = port;
+    stored.name    = normalizeRdbText(port.name);
+    stored.comment = normalizeRdbText(port.comment);
+    for (auto &b : stored.bits) b.meaning = normalizeRdbText(b.meaning);
+
+    auto it = impl_->ports.find(stored.port);
+    if (it != impl_->ports.end()) {
+        // Compare; only mark dirty when something actually changed.
+        json a = portToJson(it->second);
+        json b = portToJson(stored);
+        if (a == b) return RdbOpResult::None;
+        it->second = stored;
+    } else {
+        impl_->ports[stored.port] = stored;
+    }
+    impl_->dirty = true;
+    return RdbOpResult::None;
+}
+
+const RdbPortEntry *RdbController::getPort(uint8_t port) const
+{
+    auto it = impl_->ports.find(port);
+    if (it == impl_->ports.end()) return nullptr;
+    return &it->second;
+}
+
+std::vector<RdbPortEntry> RdbController::listPorts() const
+{
+    std::vector<RdbPortEntry> result;   // std::map iterates ascending by key
+    result.reserve(impl_->ports.size());
+    for (const auto &kv : impl_->ports) result.push_back(kv.second);
+    return result;
+}
+
+size_t RdbController::portCount() const { return impl_->ports.size(); }
+
+// ---------------------------------------------------------------------------
+// Watchlist (Stage 6.28)
+// ---------------------------------------------------------------------------
+
+RdbOpResult RdbController::addWatchEntry(const RdbWatchEntry &watch)
+{
+    RdbWatchEntry stored = watch;
+    stored.name = normalizeRdbText(watch.name);
+    if (stored.name.empty()) return RdbOpResult::InvalidThesis;  // name required
+
+    auto it = impl_->watch.find(stored.name);
+    if (it != impl_->watch.end()) {
+        // Idempotent replace: same content -> not dirty.
+        if (it->second.address == stored.address &&
+            it->second.length  == stored.length  &&
+            it->second.format  == stored.format  &&
+            it->second.hasObjectAddress == stored.hasObjectAddress &&
+            it->second.objectAddress    == stored.objectAddress) {
+            return RdbOpResult::None;
+        }
+        it->second = stored;   // update existing name
+        impl_->dirty = true;
+        return RdbOpResult::None;
+    }
+
+    impl_->watch[stored.name] = stored;
+    impl_->dirty = true;
+    return RdbOpResult::None;
+}
+
+RdbOpResult RdbController::removeWatchEntry(const std::string &name)
+{
+    auto it = impl_->watch.find(name);
+    if (it == impl_->watch.end()) return RdbOpResult::NotFound;
+    impl_->watch.erase(it);
+    impl_->dirty = true;
+    return RdbOpResult::None;
+}
+
+std::vector<RdbWatchEntry> RdbController::listWatch() const
+{
+    std::vector<RdbWatchEntry> result;
+    result.reserve(impl_->watch.size());
+    for (const auto &kv : impl_->watch) result.push_back(kv.second);
+    std::sort(result.begin(), result.end(),
+              [](const RdbWatchEntry &a, const RdbWatchEntry &b) {
+        if (a.address != b.address) return a.address < b.address;
+        return a.name < b.name;
+    });
+    return result;
+}
+
+size_t RdbController::watchCount() const { return impl_->watch.size(); }

@@ -144,6 +144,51 @@ public:
     // Check if a specific link exists.
     bool hasLink(uint16_t address, uint16_t targetAddress) const;
 
+    // -- Protocol journal (Stage 6.28) --------------------------------------
+    // Append-only hypothesis journal. `add`/`supersede` assign entry.id and a
+    // UTC timestamp and enforce the evidence rule (§4.4): a VERIFIED*/CONFLICT/
+    // REFUTED entry must carry a valid method + non-empty evidence.
+
+    // Add an entry. On success entry.id is filled with the generated id.
+    RdbOpResult addProtocolEntry(RdbProtocolEntry &entry);
+
+    // Add an entry that replaces `supersededId`: the target's supersededBy is
+    // set to the new id; the new entry's supersedes is set to the target id.
+    // Returns the new id in outNewId.
+    RdbOpResult supersedeProtocolEntry(const std::string &supersededId,
+                                       RdbProtocolEntry &newEntry,
+                                       std::string &outNewId);
+
+    // Change status (+ method/evidence) of an existing entry in place.
+    // Re-validates the evidence rule. Does not touch append-only history.
+    RdbOpResult updateProtocolStatus(const std::string &id,
+                                     ProtocolStatus status,
+                                     bool hasMethod, ProtocolMethod method,
+                                     const std::string &evidence);
+
+    // Remove an entry. Refused if another active entry supersedes it.
+    RdbOpResult removeProtocolEntry(const std::string &id);
+
+    const RdbProtocolEntry *findProtocolEntry(const std::string &id) const;
+    std::vector<RdbProtocolEntry> getProtocol(const ProtocolFilter &filter) const;
+    size_t protocolCount() const;
+
+    // -- Ports table (Stage 6.28) -------------------------------------------
+
+    // Insert or replace a port entry (unique by port number).
+    RdbOpResult upsertPort(const RdbPortEntry &port);
+    const RdbPortEntry *getPort(uint8_t port) const;
+    std::vector<RdbPortEntry> listPorts() const;   // ascending by port
+    size_t portCount() const;
+
+    // -- Watchlist (Stage 6.28) ---------------------------------------------
+
+    // Add a watch entry. Duplicate name -> RdbOpResult::Duplicate.
+    RdbOpResult addWatchEntry(const RdbWatchEntry &watch);
+    RdbOpResult removeWatchEntry(const std::string &name);
+    std::vector<RdbWatchEntry> listWatch() const;   // ascending by address
+    size_t watchCount() const;
+
     // -- ROM identity -------------------------------------------------------
 
     // Set ROM identity (called when loading a ROM alongside RDB).

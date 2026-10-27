@@ -131,13 +131,14 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // ---------------------------------------------------------------------------
 
 void test_all_tools_registered() {
-    TEST_BEGIN("all 76 tools registered");
+    TEST_BEGIN("all 86 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
     // Stage 6.26: 70, Stage 6.27 raster/beam (beam_state, screen_snapshot,
     // raster_events) = 73, + debug_get_server_info (build provenance) = 74,
-    // + debug_get_int_events / debug_clear_int_events (RST 7 / INT log) = 76
-    CHECK_EQ(static_cast<int>(names.size()), 76, "should have 76 tools");
+    // + debug_get_int_events / debug_clear_int_events (RST 7 / INT log) = 76,
+    // + Stage 6.28 knowledge tools (protocol/ports/watchlist) = 86
+    CHECK_EQ(static_cast<int>(names.size()), 86, "should have 86 tools");
     // tools/list must reflect reality: no duplicates in registration
     std::set<std::string> unique(names.begin(), names.end());
     CHECK_EQ(static_cast<int>(unique.size()), static_cast<int>(names.size()),
@@ -148,7 +149,18 @@ void test_all_tools_registered() {
                           "debug_get_raster_events",
                           "debug_get_int_events",
                           "debug_clear_int_events",
-                          "debug_get_server_info"}) {
+                          "debug_get_server_info",
+                          // Stage 6.28: RDB knowledge tools
+                          "debug_add_protocol_entry",
+                          "debug_supersede_protocol_entry",
+                          "debug_get_protocol",
+                          "debug_update_protocol_status",
+                          "debug_remove_protocol_entry",
+                          "debug_upsert_port",
+                          "debug_get_ports",
+                          "debug_add_watch_entry",
+                          "debug_remove_watch_entry",
+                          "debug_list_watch"}) {
         CHECK(unique.count(t) == 1, std::string("registered: ") + t);
     }
     TEST_END();
@@ -983,6 +995,118 @@ void test_rdb_link_remove_missing() {
 }
 
 // ---------------------------------------------------------------------------
+// RDB Knowledge tools (Stage 6.28): protocol / ports / watchlist
+// ---------------------------------------------------------------------------
+
+void test_protocol_lifecycle() {
+    TEST_BEGIN("protocol add/get/update lifecycle");
+    Fixture f;
+
+    auto add = f.mcp.callTool("debug_add_protocol_entry",
+        {{"thesis", "port 0x60 bit0 is keyp ready"}, {"status", "UNVERIFIED"},
+         {"scope", "hardware"}});
+    CHECK(!isErrorContent(add), "add unverified entry succeeds");
+    auto created = parseTextAsJson(add);
+    CHECK(created.contains("id"), "has id");
+    CHECK(created["status"] == "UNVERIFIED", "status echoes");
+    CHECK(created["active"] == true, "active by default");
+    std::string id = created["id"].get<std::string>();
+
+    auto get = f.mcp.callTool("debug_get_protocol", {{"substring", "keyp"}});
+    auto data = parseTextAsJson(get);
+    CHECK_EQ(1, static_cast<int>(data["count"].get<int>()), "substring match 1");
+
+    auto upd = f.mcp.callTool("debug_update_protocol_status",
+        {{"id", id}, {"status", "VERIFIED_BY_TRACE"},
+         {"method", "trace"}, {"evidence", "trace @0x1234 IN 0x60 -> bit0=1"}});
+    CHECK(!isErrorContent(upd), "promote to verified with evidence");
+
+    auto info = parseTextAsJson(f.mcp.callTool("debug_get_rdb_info"));
+    CHECK(info["protocol_count"] == 1, "rdb_info reflects protocol_count");
+    TEST_END();
+}
+
+void test_protocol_evidence_rule() {
+    TEST_BEGIN("protocol — verified without evidence rejected");
+    Fixture f;
+
+    auto bad = f.mcp.callTool("debug_add_protocol_entry",
+        {{"thesis", "unproven claim"}, {"status", "VERIFIED"}});
+    CHECK(isErrorContent(bad), "VERIFIED without method+evidence fails");
+
+    auto badStatus = f.mcp.callTool("debug_add_protocol_entry",
+        {{"thesis", "x"}, {"status", "BOGUS"}});
+    CHECK(isErrorContent(badStatus), "unknown status enum rejected");
+    TEST_END();
+}
+
+void test_protocol_supersede() {
+    TEST_BEGIN("protocol supersede preserves history");
+    Fixture f;
+
+    auto add = parseTextAsJson(f.mcp.callTool("debug_add_protocol_entry",
+        {{"thesis", "old thesis"}, {"status", "SPECULATION"}}));
+    std::string oldId = add["id"].get<std::string>();
+
+    auto sup = f.mcp.callTool("debug_supersede_protocol_entry",
+        {{"superseded_id", oldId}, {"thesis", "new thesis"},
+         {"status", "VERIFIED_BY_TRACE"}, {"method", "trace"}, {"evidence", "e"}});
+    CHECK(!isErrorContent(sup), "supersede succeeds");
+    auto created = parseTextAsJson(sup);
+    CHECK(created["supersedes"] == oldId, "new supersedes old");
+
+    auto active = parseTextAsJson(f.mcp.callTool("debug_get_protocol",
+        {{"active_only", true}}));
+    CHECK_EQ(1, static_cast<int>(active["count"].get<int>()), "only new is active");
+
+    // Removing the superseded entry is refused while an active entry points at it
+    auto rmOld = f.mcp.callTool("debug_remove_protocol_entry", {{"id", oldId}});
+    CHECK(isErrorContent(rmOld), "cannot remove referenced entry");
+    TEST_END();
+}
+
+void test_ports_upsert_get() {
+    TEST_BEGIN("ports upsert + list");
+    Fixture f;
+
+    auto up = f.mcp.callTool("debug_upsert_port",
+        {{"port", 0x60}, {"direction", "input"}, {"polarity", "active-low"},
+         {"name", "KEYB"},
+         {"bits", {{{"bit", 0}, {"meaning", "COL0"}}, {{"bit", 7}, {"meaning", "RDY"}}}}});
+    CHECK(!isErrorContent(up), "upsert succeeds");
+    auto created = parseTextAsJson(up);
+    CHECK(created["polarity"] == "active-low", "polarity echoes");
+    CHECK_EQ(2, static_cast<int>(created["bits"].size()), "2 bits");
+
+    auto bad = f.mcp.callTool("debug_upsert_port",
+        {{"port", 0x61}, {"direction", "sideways"}, {"polarity", "n/a"}});
+    CHECK(isErrorContent(bad), "invalid direction rejected");
+
+    auto list = parseTextAsJson(f.mcp.callTool("debug_get_ports"));
+    CHECK_EQ(1, static_cast<int>(list["count"].get<int>()), "1 port");
+    TEST_END();
+}
+
+void test_watch_lifecycle() {
+    TEST_BEGIN("watch add/list/remove");
+    Fixture f;
+
+    auto add = f.mcp.callTool("debug_add_watch_entry",
+        {{"name", "score"}, {"address", 0x4000}, {"length", 2}, {"format", "uint16-le"}});
+    CHECK(!isErrorContent(add), "add succeeds");
+
+    auto list = parseTextAsJson(f.mcp.callTool("debug_list_watch"));
+    CHECK_EQ(1, static_cast<int>(list["count"].get<int>()), "1 watch entry");
+
+    auto rm = f.mcp.callTool("debug_remove_watch_entry", {{"name", "score"}});
+    CHECK(!isErrorContent(rm), "remove succeeds");
+
+    auto rm2 = f.mcp.callTool("debug_remove_watch_entry", {{"name", "score"}});
+    CHECK(isErrorContent(rm2), "remove missing fails");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Stage 6.19: Multi-entry analyze_code MCP tests
 // ---------------------------------------------------------------------------
 
@@ -1389,7 +1513,7 @@ void test_mcp_get_server_info() {
     CHECK(!data["gitHash"].get<std::string>().empty(), "gitHash non-empty");
     CHECK(data["buildSeq"].get<int>() >= 0, "buildSeq numeric");
     CHECK(!data["buildTime"].get<std::string>().empty(), "buildTime non-empty");
-    CHECK_EQ(data["apiVersion"].get<int>(), 5, "api_version 5");
+    CHECK_EQ(data["apiVersion"].get<int>(), 6, "api_version 6");
     CHECK(data["pid"].get<int>() > 1, "pid plausible");
     CHECK(!data["startedAt"].get<std::string>().empty(), "startedAt non-empty");
     TEST_END();
@@ -1467,6 +1591,13 @@ int main()
     test_rdb_link_unresolved_target();
     test_rdb_link_duplicate();
     test_rdb_link_remove_missing();
+
+    // RDB Knowledge tools (Stage 6.28)
+    test_protocol_lifecycle();
+    test_protocol_evidence_rule();
+    test_protocol_supersede();
+    test_ports_upsert_get();
+    test_watch_lifecycle();
 
     // Error propagation
     test_error_propagation_invalid_address();

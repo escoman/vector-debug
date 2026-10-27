@@ -780,6 +780,363 @@ TEST(property_value_equality)
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.28 — Protocol journal
+// ---------------------------------------------------------------------------
+
+static RdbProtocolEntry makeVerifiedEntry(const std::string &thesis) {
+    RdbProtocolEntry e;
+    e.thesis = thesis;
+    e.status = ProtocolStatus::VerifiedByTrace;
+    e.scope  = ProtocolScope::Hardware;
+    e.hasMethod = true;
+    e.method    = ProtocolMethod::Trace;
+    e.evidence  = "breakpoint @0x1234: reader saw bit 2 = 0";
+    return e;
+}
+
+static std::string readFileToString(const std::string &p) {
+    std::ifstream f(p);
+    return std::string((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+}
+
+TEST(protocol_add_assigns_id_and_timestamp)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry e = makeVerifiedEntry("Keyboard port is active-low");
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::None);
+    ASSERT(e.id == "P-0001");
+    ASSERT(!e.timestamp.empty());
+    ASSERT_EQ(ctrl.protocolCount(), (size_t)1);
+    ASSERT(ctrl.isDirty());
+
+    RdbProtocolEntry e2 = makeVerifiedEntry("Second claim");
+    ASSERT(ctrl.addProtocolEntry(e2) == RdbOpResult::None);
+    ASSERT(e2.id == "P-0002");
+}
+
+TEST(protocol_requires_evidence)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry e;
+    e.thesis = "Score at $2010";
+    e.status = ProtocolStatus::Verified;   // requires method + evidence
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::MissingEvidence);
+    ASSERT_EQ(ctrl.protocolCount(), (size_t)0);
+
+    e.hasMethod = true; e.method = ProtocolMethod::Diff;
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::MissingEvidence);  // still no evidence
+    e.evidence = "diff score=0 vs score=420 -> $2010 changed";
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::None);
+}
+
+TEST(protocol_speculation_no_evidence)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry e;
+    e.thesis = "Maybe overlays";
+    e.status = ProtocolStatus::Speculation;
+    e.scope  = ProtocolScope::Rom;
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::None);
+}
+
+TEST(protocol_empty_thesis_rejected)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry e = makeVerifiedEntry("   ");
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::InvalidThesis);
+}
+
+TEST(protocol_supersede_history_preserved)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry old = makeVerifiedEntry("$D000+ is packed graphics");
+    old.scope = ProtocolScope::Rom;
+    ASSERT(ctrl.addProtocolEntry(old) == RdbOpResult::None);
+
+    RdbProtocolEntry nu;
+    nu.thesis = "$D000+ is actually executable code (PC=$E2D7 observed)";
+    nu.status = ProtocolStatus::Refuted;   // requires evidence
+    nu.scope  = ProtocolScope::Rom;
+    nu.hasMethod = true; nu.method = ProtocolMethod::Trace;
+    nu.evidence = "checkpoint PC=$E2D7";
+    std::string newId;
+    ASSERT(ctrl.supersedeProtocolEntry(old.id, nu, newId) == RdbOpResult::None);
+    ASSERT(newId == "P-0002");
+
+    const RdbProtocolEntry *o = ctrl.findProtocolEntry("P-0001");
+    ASSERT(o != nullptr);
+    ASSERT(o->supersededBy == "P-0002");
+    ASSERT(o->isSuperseded());
+    ASSERT(ctrl.findProtocolEntry("P-0002")->supersedes == "P-0001");
+
+    // activeOnly must hide the superseded entry.
+    ProtocolFilter f; f.activeOnly = true;
+    auto active = ctrl.getProtocol(f);
+    ASSERT_EQ(active.size(), (size_t)1);
+    ASSERT(active[0].id == "P-0002");
+
+    // Cannot delete an entry another active entry supersedes.
+    ASSERT(ctrl.removeProtocolEntry("P-0001") == RdbOpResult::Referenced);
+}
+
+TEST(protocol_get_filter_substring_and_status)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry a = makeVerifiedEntry("Keyboard strobe polarity");
+    RdbProtocolEntry b = makeVerifiedEntry("Score variable location");
+    b.status = ProtocolStatus::VerifiedBySource; b.method = ProtocolMethod::PrimarySource;
+    ASSERT(ctrl.addProtocolEntry(a) == RdbOpResult::None);
+    ASSERT(ctrl.addProtocolEntry(b) == RdbOpResult::None);
+
+    ProtocolFilter f; f.substring = "keyboard";
+    ASSERT_EQ(ctrl.getProtocol(f).size(), (size_t)1);
+
+    ProtocolFilter g; g.hasStatus = true; g.status = ProtocolStatus::VerifiedBySource;
+    ASSERT_EQ(ctrl.getProtocol(g).size(), (size_t)1);
+    ASSERT(ctrl.getProtocol(g)[0].id == "P-0002");
+}
+
+TEST(protocol_update_status_validates)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbProtocolEntry e;
+    e.thesis = "Guess"; e.status = ProtocolStatus::Speculation; e.scope = ProtocolScope::Tooling;
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::None);
+    // Promoting to VERIFIED without evidence must fail.
+    ASSERT(ctrl.updateProtocolStatus(e.id, ProtocolStatus::Verified, false,
+                                    ProtocolMethod::Trace, "") == RdbOpResult::MissingEvidence);
+    ASSERT(ctrl.updateProtocolStatus(e.id, ProtocolStatus::Verified, true,
+                                    ProtocolMethod::GoldenTest, "golden passes") == RdbOpResult::None);
+    ASSERT(ctrl.findProtocolEntry(e.id)->status == ProtocolStatus::Verified);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.28 — Ports table
+// ---------------------------------------------------------------------------
+
+TEST(ports_upsert_and_list_sorted)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbPortEntry hi;
+    hi.port = 0x0F; hi.name = "palette"; hi.direction = PortDirection::Out;
+    hi.polarity = PortPolarity::ActiveHigh;
+    hi.bits.push_back({0, "intensity"});
+    ASSERT(ctrl.upsertPort(hi) == RdbOpResult::None);
+
+    RdbPortEntry lo;
+    lo.port = 0x01; lo.name = "keyboard"; lo.direction = PortDirection::In;
+    lo.polarity = PortPolarity::ActiveLow;
+    lo.bits.push_back({7, "shift"});
+    ASSERT(ctrl.upsertPort(lo) == RdbOpResult::None);
+
+    auto all = ctrl.listPorts();
+    ASSERT_EQ(all.size(), (size_t)2);
+    ASSERT_EQ(all[0].port, (uint8_t)0x01);   // ascending
+    ASSERT(all[0].polarity == PortPolarity::ActiveLow);
+
+    const RdbPortEntry *k = ctrl.getPort(0x01);
+    ASSERT(k != nullptr);
+    ASSERT(k->name == "keyboard");
+    ASSERT_EQ(k->bits.size(), (size_t)1);
+    ASSERT(k->bits[0].meaning == "shift");
+}
+
+TEST(ports_upsert_idempotent_no_dirty)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbPortEntry p; p.port = 0x0C; p.name = "color"; p.direction = PortDirection::Out;
+    p.polarity = PortPolarity::NA;
+    ASSERT(ctrl.upsertPort(p) == RdbOpResult::None);
+    ctrl.saveAs(TEST_RDB_TMP);          // reset dirty
+    ASSERT(!ctrl.isDirty());
+    ASSERT(ctrl.upsertPort(p) == RdbOpResult::None);   // identical
+    ASSERT(!ctrl.isDirty());
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.28 — Watchlist
+// ---------------------------------------------------------------------------
+
+TEST(watch_add_update_remove)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    RdbWatchEntry score; score.name = "score"; score.address = 0x2010; score.length = 2; score.format = "uint16-le";
+    ASSERT(ctrl.addWatchEntry(score) == RdbOpResult::None);
+    RdbWatchEntry demo; demo.name = "demo_flag"; demo.address = 0x0020; demo.format = "bits";
+    ASSERT(ctrl.addWatchEntry(demo) == RdbOpResult::None);
+
+    auto list = ctrl.listWatch();
+    ASSERT_EQ(list.size(), (size_t)2);
+    ASSERT_EQ(list[0].address, (uint16_t)0x0020);   // ascending by address
+
+    // Same name + same content -> not dirty change.
+    ctrl.saveAs(TEST_RDB_TMP);
+    ASSERT(!ctrl.isDirty());
+    ASSERT(ctrl.addWatchEntry(score) == RdbOpResult::None);
+    ASSERT(!ctrl.isDirty());
+
+    // Same name + changed address -> updates and marks dirty.
+    RdbWatchEntry score2 = score; score2.address = 0x2040;
+    ASSERT(ctrl.addWatchEntry(score2) == RdbOpResult::None);
+    ASSERT(ctrl.isDirty());
+    ASSERT_EQ(ctrl.watchCount(), (size_t)2);   // still keyed by name, no dup
+
+    ASSERT(ctrl.removeWatchEntry("score") == RdbOpResult::None);
+    ASSERT(ctrl.removeWatchEntry("score") == RdbOpResult::NotFound);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.28 — Versioning + persistence
+// ---------------------------------------------------------------------------
+
+TEST(version_bumps_to_2_with_knowledge)
+{
+    RdbController ctrl;
+    RdbRomIdentity rom; rom.file = "g.rom"; rom.size = 32768; rom.sha256 = "deadbeef";
+    ctrl.initialize("vector06c", rom, TEST_RDB_TMP);
+    RdbPortEntry p; p.port = 0x01; p.name = "kb"; p.polarity = PortPolarity::ActiveLow;
+    ctrl.upsertPort(p);
+    ASSERT(ctrl.save() == true);
+    std::string text = readFileToString(TEST_RDB_TMP);
+    ASSERT(text.find("\"version\": 2") != std::string::npos);
+    ::remove((std::string(TEST_RDB_TMP) + ".tmp").c_str());
+}
+
+TEST(version_stays_1_without_knowledge)
+{
+    RdbController ctrl;
+    RdbRomIdentity rom; rom.file = "g.rom"; rom.size = 32768; rom.sha256 = "cafe";
+    ctrl.initialize("vector06c", rom, TEST_RDB_TMP);
+    ctrl.addObject(makeTestObject(0x100, "start"));   // objects only
+    ASSERT(ctrl.save() == true);
+    std::string text = readFileToString(TEST_RDB_TMP);
+    ASSERT(text.find("\"version\": 1") != std::string::npos);
+    ::remove((std::string(TEST_RDB_TMP) + ".tmp").c_str());
+}
+
+TEST(knowledge_roundtrip_persistence)
+{
+    RdbController ctrl;
+    RdbRomIdentity rom; rom.file = "g.rom"; rom.size = 32768; rom.sha256 = "sha";
+    ctrl.initialize("vector06c", rom, TEST_RDB_TMP);
+
+    RdbProtocolEntry e = makeVerifiedEntry("Keyboard active-low");
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::None);
+    RdbProtocolEntry nu;
+    nu.thesis = "superseding claim"; nu.status = ProtocolStatus::Refuted; nu.scope = ProtocolScope::Rom;
+    nu.hasMethod = true; nu.method = ProtocolMethod::Trace; nu.evidence = "e";
+    std::string nid;
+    ctrl.supersedeProtocolEntry(e.id, nu, nid);
+
+    RdbPortEntry p; p.port = 0x01; p.name = "kb"; p.polarity = PortPolarity::ActiveLow; p.direction = PortDirection::In;
+    p.bits.push_back({7, "shift"});
+    ctrl.upsertPort(p);
+
+    RdbWatchEntry w; w.name = "score"; w.address = 0x2010; w.length = 2; w.format = "uint16-le";
+    ctrl.addWatchEntry(w);
+
+    ASSERT(ctrl.save() == true);
+
+    RdbController c2;
+    ASSERT(c2.load(TEST_RDB_TMP));
+    ASSERT_EQ(c2.protocolCount(), (size_t)2);
+    ASSERT_EQ(c2.portCount(), (size_t)1);
+    ASSERT_EQ(c2.watchCount(), (size_t)1);
+    ASSERT(c2.findProtocolEntry("P-0001")->supersededBy == "P-0002");
+    const RdbPortEntry *rp = c2.getPort(0x01);
+    ASSERT(rp && rp->polarity == PortPolarity::ActiveLow && rp->bits[0].meaning == "shift");
+    ASSERT(c2.listWatch()[0].name == "score");
+    ASSERT(!c2.isDirty());   // load must not dirty
+    // Counter resumed after load so the next id is P-0003.
+    RdbProtocolEntry nx = makeVerifiedEntry("new after reload");
+    ASSERT(c2.addProtocolEntry(nx) == RdbOpResult::None);
+    ASSERT(nx.id == "P-0003");
+
+    ::remove((std::string(TEST_RDB_TMP) + ".tmp").c_str());
+}
+
+TEST(promotion_protocol_to_port)
+{
+    // §9: a confirmed protocol entry is promoted into a port row. Promotion does
+    // not delete the protocol entry — it links to the promoted target so the
+    // "when / by what evidence" provenance survives. The link round-trips.
+    RdbController ctrl;
+    RdbRomIdentity rom; rom.file = "g.rom"; rom.size = 32768; rom.sha256 = "sha";
+    ctrl.initialize("vector06c", rom, TEST_RDB_TMP);
+
+    RdbProtocolEntry e = makeVerifiedEntry("Keyboard port 0x01 is active-low");
+    ASSERT(ctrl.addProtocolEntry(e) == RdbOpResult::None);
+
+    RdbPortEntry p; p.port = 0x01; p.name = "kb";
+    p.polarity = PortPolarity::ActiveLow; p.direction = PortDirection::In;
+    ASSERT(ctrl.upsertPort(p) == RdbOpResult::None);
+
+    // Mark the entry as promoted by linking it to the port row (append a link).
+    RdbProtocolEntry promoted = e;
+    promoted.id.clear(); promoted.timestamp.clear();
+    promoted.links.push_back("port:0x01");
+    std::string nid;
+    ASSERT(ctrl.supersedeProtocolEntry(e.id, promoted, nid) == RdbOpResult::None);
+    ASSERT(ctrl.findProtocolEntry(nid)->links.size() == 1);
+
+    ASSERT(ctrl.save());
+    RdbController c2;
+    ASSERT(c2.load(TEST_RDB_TMP));
+    // Promotion history preserved: original superseded, promoted entry active
+    // with its provenance link to the compiled port row.
+    ASSERT(c2.findProtocolEntry(e.id)->isSuperseded());
+    const RdbProtocolEntry *act = c2.findProtocolEntry(nid);
+    ASSERT(act && !act->isSuperseded());
+    ASSERT(act && act->links.size() == 1 && act->links[0] == "port:0x01");
+    ASSERT(act && act->status == ProtocolStatus::VerifiedByTrace);
+    ASSERT(c2.getPort(0x01) != nullptr);
+
+    ::remove((std::string(TEST_RDB_TMP) + ".tmp").c_str());
+}
+
+TEST(load_rejects_version_3)
+{
+    std::string path = TEST_RDB_TMP;
+    {
+        std::ofstream f(path);
+        f << "{\n  \"format\": \"rdb\",\n  \"platform\": \"vector06c\",\n"
+             "  \"version\": 3,\n  \"objects\": []\n}\n";
+    }
+    RdbController ctrl;
+    ASSERT(!ctrl.load(path));
+}
+
+TEST(parse_helpers_reject_unknown)
+{
+    ProtocolStatus st;
+    ASSERT(parseProtocolStatus("verified_by_trace", st) && st == ProtocolStatus::VerifiedByTrace);
+    ASSERT(parseProtocolStatus("VERIFIED", st) && st == ProtocolStatus::Verified);
+    ASSERT(!parseProtocolStatus("MAYBE", st));
+
+    ProtocolScope sc;
+    ASSERT(parseProtocolScope("HARDWARE", sc) && sc == ProtocolScope::Hardware);
+    ASSERT(!parseProtocolScope("network", sc));
+
+    PortPolarity po;
+    ASSERT(parsePortPolarity("active-low", po) && po == PortPolarity::ActiveLow);
+    ASSERT(!parsePortPolarity("active-maybe", po));
+
+    ASSERT(protocolStatusRequiresEvidence(ProtocolStatus::Refuted));
+    ASSERT(!protocolStatusRequiresEvidence(ProtocolStatus::Speculation));
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 

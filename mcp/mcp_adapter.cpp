@@ -38,10 +38,11 @@ McpServer::McpServer(AgentApi &api)
     // result fields are added: 2 = Stage 6.26 batch analysis tools,
     // 3 = Stage 6.27 raster/beam debugging tools,
     // 4 = debug_get_server_info build-provenance tool,
-    // 5 = debug_get_int_events / debug_clear_int_events (RST 7 / INT log).
+    // 5 = debug_get_int_events / debug_clear_int_events (RST 7 / INT log),
+    // 6 = Stage 6.28 RDB knowledge tools (protocol / ports / watchlist).
     server_->set_capabilities({
         {"tools", {{"listChanged", false}}},
-        {"v06c",  {{"api_version", 5}}}
+        {"v06c",  {{"api_version", 6}}}
     });
 }
 
@@ -100,6 +101,7 @@ void McpServer::registerAllTools() {
     registerRomTools();
     registerAnnotationTools();
     registerRdbTools();
+    registerKnowledgeTools();        // Stage 6.28: protocol / ports / watchlist
     registerRuntimeAnalysisTools();  // Stage 6.20
     registerBatchAnalysisTools();    // Stage 6.26
     registerRasterTools();           // Stage 6.27: beam / raster
@@ -1523,6 +1525,248 @@ void McpServer::registerRdbTools() {
 }
 
 // ---------------------------------------------------------------------------
+// RDB Knowledge tools (Stage 6.28) — protocol / ports / watchlist
+// ---------------------------------------------------------------------------
+
+namespace {
+// Optional string parameter (empty when absent).
+std::string optStr(const mcp::json &params, const char *name) {
+    if (!params.contains(name) || !params[name].is_string()) return std::string();
+    return params[name].get<std::string>();
+}
+// Optional boolean parameter (default when absent).
+bool optBool(const mcp::json &params, const char *name, bool def) {
+    if (!params.contains(name)) return def;
+    return params[name].get<bool>();
+}
+// Required string parameter.
+std::string reqStr(const mcp::json &params, const char *name) {
+    if (!params.contains(name) || !params[name].is_string()) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string("missing required parameter: ") + name);
+    }
+    return params[name].get<std::string>();
+}
+} // anonymous namespace
+
+void McpServer::registerKnowledgeTools() {
+    // debug_add_protocol_entry
+    {
+        auto tool = mcp::tool_builder("debug_add_protocol_entry")
+            .with_description("Append a hypothesis to the RDB protocol journal. A confirmed/refuted status requires method + non-empty evidence.")
+            .with_string_param("thesis", "One-line claim")
+            .with_string_param("status", "VERIFIED_BY_TRACE | VERIFIED_BY_SOURCE | VERIFIED | PARTIALLY_VERIFIED | CONFLICT | UNVERIFIED | REFUTED | SPECULATION")
+            .with_string_param("scope", "rom | hardware | tooling (default rom)", false)
+            .with_number_param("address", "Related address (0..65535). Optional", false)
+            .with_string_param("method", "trace | diff | primary-source | golden-test | static. Required for verified/refuted statuses", false)
+            .with_string_param("evidence", "Concrete proof (trace excerpt, diff, source ref). Required for verified/refuted statuses", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string thesis = reqStr(params, "thesis");
+            std::string status = reqStr(params, "status");
+            std::string scope  = optStr(params, "scope");
+            bool hasAddr = params.contains("address");
+            uint16_t addr = hasAddr ? getAddress(params, "address") : 0;
+            std::string method   = optStr(params, "method");
+            std::string evidence = optStr(params, "evidence");
+            auto r = api_.addProtocolEntry(thesis, status, scope, hasAddr, addr, method, evidence);
+            if (!r.success) return errorContent("add_protocol_entry_failed", r.error_message);
+            return textContent(mcp_json::protocolEntryToJson(r.value));
+        });
+    }
+
+    // debug_supersede_protocol_entry
+    {
+        auto tool = mcp::tool_builder("debug_supersede_protocol_entry")
+            .with_description("Add a protocol entry that supersedes an existing one (append-only; history is preserved).")
+            .with_string_param("superseded_id", "Id of the entry being replaced (P-NNNN)")
+            .with_string_param("thesis", "One-line claim")
+            .with_string_param("status", "Closed status enum (see debug_add_protocol_entry)")
+            .with_string_param("scope", "rom | hardware | tooling (default rom)", false)
+            .with_number_param("address", "Related address (0..65535). Optional", false)
+            .with_string_param("method", "trace | diff | primary-source | golden-test | static", false)
+            .with_string_param("evidence", "Concrete proof", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string supersededId = reqStr(params, "superseded_id");
+            std::string thesis = reqStr(params, "thesis");
+            std::string status = reqStr(params, "status");
+            std::string scope  = optStr(params, "scope");
+            bool hasAddr = params.contains("address");
+            uint16_t addr = hasAddr ? getAddress(params, "address") : 0;
+            std::string method   = optStr(params, "method");
+            std::string evidence = optStr(params, "evidence");
+            auto r = api_.supersedeProtocolEntry(supersededId, thesis, status, scope,
+                                                 hasAddr, addr, method, evidence);
+            if (!r.success) return errorContent("supersede_protocol_entry_failed", r.error_message);
+            return textContent(mcp_json::protocolEntryToJson(r.value));
+        });
+    }
+
+    // debug_get_protocol
+    {
+        auto tool = mcp::tool_builder("debug_get_protocol")
+            .with_description("Query the RDB protocol journal. Filters by substring/status/scope/address; activeOnly hides superseded entries.")
+            .with_string_param("substring", "Case-insensitive match on thesis", false)
+            .with_string_param("status", "Filter by status enum (empty = any)", false)
+            .with_string_param("scope", "Filter by scope (rom|hardware|tooling, empty = any)", false)
+            .with_number_param("address", "Filter by related address (0..65535). Optional", false)
+            .with_boolean_param("active_only", "Only entries not superseded (default false)", false)
+            .with_number_param("max_entries", "Max entries (default 200, hard cap 10000)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string substring = optStr(params, "substring");
+            std::string status    = optStr(params, "status");
+            std::string scope     = optStr(params, "scope");
+            bool hasAddr = params.contains("address");
+            uint16_t addr = hasAddr ? getAddress(params, "address") : 0;
+            bool activeOnly = optBool(params, "active_only", false);
+            size_t maxEntries = getCount(params, "max_entries", 0);
+            auto r = api_.getProtocol(substring, status, scope, hasAddr, addr, activeOnly, maxEntries);
+            if (!r.success) return errorContent("get_protocol_failed", r.error_message);
+            return textContent({
+                {"count",    static_cast<int>(r.value.size())},
+                {"entries",  mcp_json::protocolEntriesToJson(r.value)}
+            });
+        });
+    }
+
+    // debug_update_protocol_status
+    {
+        auto tool = mcp::tool_builder("debug_update_protocol_status")
+            .with_description("Change the status (+ method/evidence) of an existing protocol entry in place.")
+            .with_string_param("id", "Entry id (P-NNNN)")
+            .with_string_param("status", "New status enum")
+            .with_string_param("method", "trace | diff | primary-source | golden-test | static (empty = none)", false)
+            .with_string_param("evidence", "Evidence text (required for verified/refuted statuses)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string id     = reqStr(params, "id");
+            std::string status = reqStr(params, "status");
+            std::string method   = optStr(params, "method");
+            std::string evidence = optStr(params, "evidence");
+            auto r = api_.updateProtocolStatus(id, status, method, evidence);
+            if (!r.success) return errorContent("update_protocol_status_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_remove_protocol_entry
+    {
+        auto tool = mcp::tool_builder("debug_remove_protocol_entry")
+            .with_description("Remove a protocol entry. Refused if another active entry supersedes it.")
+            .with_string_param("id", "Entry id (P-NNNN)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string id = reqStr(params, "id");
+            auto r = api_.removeProtocolEntry(id);
+            if (!r.success) return errorContent("remove_protocol_entry_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_upsert_port
+    {
+        auto tool = mcp::tool_builder("debug_upsert_port")
+            .with_description("Insert or replace a port-polarity table entry (unique by port number).")
+            .with_number_param("port", "Port number (0x00..0xFF)")
+            .with_string_param("direction", "input | output | in-out")
+            .with_string_param("polarity", "active-high | active-low | n/a")
+            .with_string_param("name", "Port name", false)
+            .with_array_param("bits", "Bit meanings: array of {\"bit\": 0..7, \"meaning\": string}", "object", false)
+            .with_string_param("comment", "Free-form comment", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint8_t port = getUint8(params, "port");
+            std::string direction = reqStr(params, "direction");
+            std::string polarity  = reqStr(params, "polarity");
+            std::string name   = optStr(params, "name");
+            std::string comment = optStr(params, "comment");
+            std::vector<RdbPortBitInput> bits;
+            if (params.contains("bits") && params["bits"].is_array()) {
+                for (const auto &b : params["bits"]) {
+                    RdbPortBitInput bi;
+                    bi.index = b.contains("bit") ? b["bit"].get<int>() : 0;
+                    bi.meaning = b.contains("meaning") && b["meaning"].is_string()
+                                     ? b["meaning"].get<std::string>() : std::string();
+                    bits.push_back(std::move(bi));
+                }
+            }
+            auto r = api_.upsertPort(port, name, direction, polarity, bits, comment);
+            if (!r.success) return errorContent("upsert_port_failed", r.error_message);
+            return textContent(mcp_json::portEntryToJson(r.value));
+        });
+    }
+
+    // debug_get_ports
+    {
+        auto tool = mcp::tool_builder("debug_get_ports")
+            .with_description("List the port-polarity table, ascending by port number.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.getPorts();
+            if (!r.success) return errorContent("get_ports_failed", r.error_message);
+            return textContent({
+                {"count", static_cast<int>(r.value.size())},
+                {"ports", mcp_json::portsToJson(r.value)}
+            });
+        });
+    }
+
+    // debug_add_watch_entry
+    {
+        auto tool = mcp::tool_builder("debug_add_watch_entry")
+            .with_description("Add or update a watch-list entry (keyed by name).")
+            .with_string_param("name", "Watch variable name")
+            .with_number_param("address", "Memory address (0..65535)")
+            .with_number_param("length", "Byte length (default 1)", false)
+            .with_string_param("format", "uint8 | int8 | uint16-le | bcd | bits ... (default uint8)", false)
+            .with_number_param("object_address", "Linked RDB object address. Optional", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string name = reqStr(params, "name");
+            uint16_t addr = getAddress(params, "address");
+            uint32_t length = static_cast<uint32_t>(getCount(params, "length", 1));
+            std::string format = optStr(params, "format");
+            bool hasObj = params.contains("object_address");
+            uint16_t objAddr = hasObj ? getAddress(params, "object_address") : 0;
+            auto r = api_.addWatchEntry(name, addr, length, format, hasObj, objAddr);
+            if (!r.success) return errorContent("add_watch_entry_failed", r.error_message);
+            return textContent(mcp_json::watchEntryToJson(r.value));
+        });
+    }
+
+    // debug_remove_watch_entry
+    {
+        auto tool = mcp::tool_builder("debug_remove_watch_entry")
+            .with_description("Remove a watch-list entry by name.")
+            .with_string_param("name", "Watch variable name")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            std::string name = reqStr(params, "name");
+            auto r = api_.removeWatchEntry(name);
+            if (!r.success) return errorContent("remove_watch_entry_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_list_watch
+    {
+        auto tool = mcp::tool_builder("debug_list_watch")
+            .with_description("List the watch-list, ascending by address.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.listWatch();
+            if (!r.success) return errorContent("list_watch_failed", r.error_message);
+            return textContent({
+                {"count",   static_cast<int>(r.value.size())},
+                {"entries", mcp_json::watchListToJson(r.value)}
+            });
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Runtime Memory Analysis tools (Stage 6.20) — 5 tools
 // ---------------------------------------------------------------------------
 
@@ -2269,7 +2513,7 @@ void McpServer::registerServerTools() {
                 {"gitState",   VDB_GIT_DIRTY},
                 {"buildSeq",   VDB_BUILD_SEQ},
                 {"buildTime",  VDB_BUILD_TIME},
-                {"apiVersion", 5},
+                {"apiVersion", 6},
                 {"pid",        static_cast<int>(::getpid())},
                 {"startedAt",  isoUtc(bootTime_)},
                 {"uptimeSec",  static_cast<int>(now - bootTime_)}

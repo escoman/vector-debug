@@ -133,6 +133,15 @@ json rdbObjectToJson(const RdbObjectResult &obj);
 json rdbObjectsToJson(const std::vector<RdbObjectResult> &objects);
 json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links);
 
+// -- RDB Knowledge sections (Stage 6.28) ------------------------------------
+
+json protocolEntryToJson(const RdbProtocolResult &e);
+json protocolEntriesToJson(const std::vector<RdbProtocolResult> &entries);
+json portEntryToJson(const RdbPortResult &p);
+json portsToJson(const std::vector<RdbPortResult> &ports);
+json watchEntryToJson(const RdbWatchResult &w);
+json watchListToJson(const std::vector<RdbWatchResult> &entries);
+
 // -- Runtime Memory Analysis types (Stage 6.20) ------------------------------
 
 bool runtimeBlockActive(const RuntimeAccessBlock &block);   // Stage 6.22 §3

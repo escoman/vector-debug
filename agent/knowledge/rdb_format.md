@@ -1,6 +1,6 @@
 # RDB Format Specification
 
-**Version**: 1
+**Version**: 2 (v1 files remain loadable; v2 only adds the optional `protocol`, `ports`, `watchlist` sections)
 **Canonical status**: This document is the single authoritative description of the RDB file format.
 
 ---
@@ -26,7 +26,7 @@ File extension: `.rdb`
 {
   "format": "rdb",
   "platform": "vector06c",
-  "version": 1,
+  "version": 2,
   "rom": {
     "file": "/path/to/rom.rom",
     "size": 16384,
@@ -34,7 +34,10 @@ File extension: `.rdb`
   },
   "objects": [
     ...
-  ]
+  ],
+  "protocol": [ ... ],
+  "ports": [ ... ],
+  "watchlist": [ ... ]
 }
 ```
 
@@ -44,9 +47,15 @@ File extension: `.rdb`
 |-------|------|-------------|
 | `format` | string | Always `"rdb"` |
 | `platform` | string | Target platform, e.g. `"vector06c"` |
-| `version` | integer | Format version, currently `1` |
+| `version` | integer | Format version. Loader accepts `<= 2`. `1` = objects only; `2` = adds `protocol`/`ports`/`watchlist` |
 | `rom` | object | ROM identity (see below) |
 | `objects` | array | RDB objects (may be empty) |
+
+The `protocol`, `ports`, `watchlist` sections are **optional**. A `version: 1` file (or a v2
+file that omits them) loads with those sections empty and does **not** become dirty.
+The controller writes `version: 2` on save **only if at least one knowledge section is
+non-empty**; otherwise it preserves the file's original version (never silently upgrades a
+touch-free file). `version > 2` is rejected on load.
 
 ---
 
@@ -215,6 +224,127 @@ Means: `start` calls/references objects at `0x2000` and `0x3000`.
 
 ---
 
+## Knowledge Sections (v2)
+
+Version 2 promotes RDB from "a database of ROM objects" to "a knowledge base about a ROM".
+Three top-level sections live next to `objects`. They are pure **data**: the controller never
+interprets platform specifics — Vector-06C semantics live in the values, not in code branches.
+
+### `protocol` — hypothesis journal (append-only)
+
+Empirical RE findings with a provable status. At session start the agent reads the active
+entries and does **not re-verify** what is already confirmed or refuted.
+
+```json
+{
+  "id": "P-0001",
+  "timestamp": "2026-10-27T14:32:10Z",
+  "thesis": "Keyboard port 0x01 is active-low: pressed key = 0-bit",
+  "status": "VERIFIED_BY_TRACE",
+  "scope": "hardware",
+  "address": "0x1234",
+  "method": "trace",
+  "evidence": "breakpoint @0x1234: after press_key('X') reader saw bit 2 = 0",
+  "links": ["port:0x01"],
+  "supersedes": null,
+  "superseded_by": null
+}
+```
+
+| Field | Required | Type | Notes |
+|-------|:---:|------|-------|
+| `id` | yes | string | `P-NNNN`, assigned by the controller, monotonic; counter resumes after load |
+| `timestamp` | yes | string | ISO-8601 UTC, assigned by the controller |
+| `thesis` | yes | string | one-line claim, normalized via `normalizeRdbText`; empty after normalize → rejected |
+| `status` | yes | enum | closed set below; unknown value → `InvalidArgument` |
+| `scope` | yes | enum | `rom` / `hardware` / `tooling` (default `rom`) |
+| `address` | no | hex/null | ROM address binding when present |
+| `method` | \* | enum | `trace` / `diff` / `primary-source` / `golden-test` / `static` |
+| `evidence` | \* | string | the concrete proof, normalized |
+| `links` | no | array | ids / promoted-target refs (see Promotion below) |
+| `supersedes` | no | id/null | this entry replaces that one |
+| `superseded_by` | no | id/null | set by the controller when this entry is replaced |
+
+**Statuses** (borrowed from `vector06c/verification.md`):
+`VERIFIED_BY_TRACE`, `VERIFIED_BY_SOURCE`, `VERIFIED`, `PARTIALLY_VERIFIED`, `CONFLICT`,
+`UNVERIFIED`, `REFUTED`, `SPECULATION`.
+
+**Evidence rule (\*):** the controller refuses to store a `VERIFIED*` / `PARTIALLY_VERIFIED` /
+`CONFLICT` / `REFUTED` entry without a valid `method` **and** non-empty `evidence`. A journal
+without proof degrades into rumor, and trusting plausible-looking rumor is exactly the L1 bug.
+
+**Append-only:** history is never rewritten. To refute an old claim, `supersede` it: the new
+entry gets `supersedes = oldId`, the old entry gets `superseded_by = newId` and becomes inactive.
+`removeProtocolEntry` is allowed **unless** another active entry still points at it via
+`supersedes` (removing a referenced entry → `Referenced` error).
+
+**Scopes & ROM identity:** `scope: rom` claims must be re-verified when the loaded ROM's
+`sha256` differs (`RdbController::matchesRom` / `debug_get_rdb_info.rom_sha256`). `hardware` /
+`tooling` claims are ROM-independent and stay valid across ROMs.
+
+### `ports` — port / register polarity table
+
+Compiled knowledge (lesson L1: "port polarity ate 6 days"). The authoritative source for P5
+disassembler auto-comments and a meaningful I/O view. Unique per `port` number.
+
+```json
+{
+  "port": "0x01",
+  "name": "keyboard_strobe",
+  "direction": "input",
+  "polarity": "active-low",
+  "bits": [
+    { "bit": 0, "meaning": "K1 / KEY0" },
+    { "bit": 7, "meaning": "shift/CAPS" }
+  ],
+  "comment": "pressed key = 0-bit; injector must invert the mask"
+}
+```
+
+`direction` ∈ `input` / `output` / `in-out`; `polarity` ∈ `active-high` / `active-low` / `n/a`;
+unknown values → `InvalidArgument`. `bits` ≤ 8 entries, each `{bit: 0..7, meaning}`. `name` /
+`comment` / bit meanings are normalized. `upsertPort` is idempotent: re-inserting an identical
+row does not set `dirty`.
+
+### `watchlist` — observed variables
+
+Lesson L4: a checkpoint must print named variable values, not just PC. Keyed by `name`
+(re-adding the same name updates in place, no duplicate growth).
+
+```json
+{
+  "name": "score",
+  "address": "0x2010",
+  "length": 2,
+  "format": "uint16-le",
+  "object_address": "0x2010"
+}
+```
+
+`format` ∈ `uint8` / `int8` / `uint16-le` / `bcd` / `bits` / … (default `uint8`). `object_address`
+is an optional link to an existing `Variable` object — the variable data stays in `objects`,
+the watchlist only records "print at stop + format". Actual checkpoint printing is backend work,
+out of scope for RDB storage.
+
+### Promotion pipeline (protocol → ports / comments)
+
+The single legal path from "draft" (journal) to "table" (compiled knowledge):
+
+```
+protocol entry (VERIFIED_BY_TRACE / VERIFIED_BY_SOURCE)
+    │  promotion
+    ├─ scope=hardware        → a `ports` row
+    └─ scope=rom + address   → an `objects` comment / property
+```
+
+Promotion **does not delete** the protocol entry — it records the promoted target in `links`
+(e.g. `"port:0x01"`) so the "when / proven by what" history survives. You must not write
+polarity knowledge straight into `ports` bypassing the journal. Exception: an initial
+canonical Vector port table bulk-import is recorded as one `VERIFIED_BY_SOURCE` foundation
+entry.
+
+---
+
 ## Dirty / Save Semantics
 
 - RDB tracks a **dirty flag** internally.
@@ -289,3 +419,13 @@ GUI / Agent API / MCP → RDB Controller → .rdb file
 | `debug_add_rdb_link` | Add directed link from source to target |
 | `debug_remove_rdb_link` | Remove directed link |
 | `debug_get_rdb_links` | Get links from source object |
+| `debug_add_protocol_entry` | Append a hypothesis to the protocol journal |
+| `debug_supersede_protocol_entry` | Replace an entry, preserving history |
+| `debug_get_protocol` | Query the journal (substring/status/scope/address/active_only/max_entries) |
+| `debug_update_protocol_status` | Change an entry's status (+ method/evidence) in place |
+| `debug_remove_protocol_entry` | Delete an entry (refused if still referenced) |
+| `debug_upsert_port` | Insert/replace a port-polarity row |
+| `debug_get_ports` | List the port table (ascending) |
+| `debug_add_watch_entry` | Add/update a watchlist variable (by name) |
+| `debug_remove_watch_entry` | Remove a watchlist variable |
+| `debug_list_watch` | List the watchlist (ascending by address) |

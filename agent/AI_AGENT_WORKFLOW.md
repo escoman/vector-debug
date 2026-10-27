@@ -415,6 +415,59 @@ A hypothesis should not automatically become a link. Verify first via MCP.
 | `debug_remove_rdb_link` | Remove directed link |
 | `debug_get_rdb_links` | Get links from source object |
 
+### Knowledge Sections: protocol / ports / watchlist (Stage 6.28)
+
+RDB v2 adds three knowledge sections beside `objects`. They turn RDB into a *knowledge base*
+so an agent never restarts hypothesis checks that were already settled.
+
+- **`protocol`** — append-only hypothesis journal (thesis + status + evidence).
+- **`ports`** — compiled port/register polarity + bit-semantics table.
+- **`watchlist`** — named variables to print at a checkpoint.
+
+Closed enums, the evidence rule, and supersede semantics are defined in
+`knowledge/rdb_format.md`. The Agent-facing operating rules:
+
+```
+Start of ROM analysis:
+  1. debug_get_protocol(active_only=true) and re-read REFUTED entries
+  2. do NOT re-verify VERIFIED* entries that carry evidence; do NOT repeat REFUTED hypotheses
+  3. if debug_get_rdb_info shows the loaded ROM sha256 differs from the RDB rom_sha256,
+     re-verify scope=rom theses — do not inherit them; scope=hardware/tooling stay valid
+
+Each hypothesis check:
+  4. dedup first: debug_get_protocol(substring=...) before adding a new claim
+  5. method + evidence → debug_add_protocol_entry (no VERIFIED*/REFUTED without proof)
+  6. to overturn an old claim: debug_supersede_protocol_entry (never delete history)
+  7. update an in-place status change: debug_update_protocol_status
+
+Promotion (the only legal path from journal → tables):
+  8. a confirmed protocol entry is promoted to a debug_upsert_port row (scope=hardware)
+     or an object comment/property (scope=rom + address)
+  9. promotion keeps the protocol entry and records the target in its `links`
+     (e.g. "port:0x01"); never write polarity straight into `ports` bypassing the journal
+
+Before saving:
+ 10. incremental debug_save_rdb after a batch of changes, not after every operation
+```
+
+### Available Knowledge-Section MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `debug_add_protocol_entry` | Append a hypothesis (thesis, status, scope, optional address/method/evidence) |
+| `debug_get_protocol` | Query the journal: `substring`, `status`, `scope`, `address`, `active_only`, `max_entries` |
+| `debug_supersede_protocol_entry` | Replace a claim, preserving append-only history |
+| `debug_update_protocol_status` | Change status (+ method/evidence) of an existing entry in place |
+| `debug_remove_protocol_entry` | Delete an entry (refused while another active entry supersedes it) |
+| `debug_upsert_port` | Insert/replace a port row (direction, polarity, bit meanings); idempotent |
+| `debug_get_ports` | List the port table, ascending by port |
+| `debug_add_watch_entry` | Add/update a watchlist variable (keyed by name) |
+| `debug_remove_watch_entry` | Remove a watchlist variable by name |
+| `debug_list_watch` | List the watchlist, ascending by address |
+
+`debug_get_protocol` always applies `max_entries` (default 200, hard cap 10000) and status
+filtering — never dump the whole journal into context.
+
 ---
 
 ## Runtime Memory Analysis (Stage 6.20)

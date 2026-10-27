@@ -2531,6 +2531,77 @@ RdbObjectResult rdbObjectToResult(const RdbObject &obj)
     return r;
 }
 
+// -- Stage 6.28: RDB knowledge-section converters + error mapping ----------
+
+// Map a Controller-level RdbOpResult to an agent ErrorCode + human message.
+std::pair<ErrorCode, std::string> mapRdbOpError(RdbOpResult r)
+{
+    switch (r) {
+        case RdbOpResult::None:            return {ErrorCode::None, ""};
+        case RdbOpResult::NotFound:        return {ErrorCode::NotFound, "entry not found"};
+        case RdbOpResult::Duplicate:       return {ErrorCode::InvalidArgument, "entry already exists"};
+        case RdbOpResult::InvalidStatus:   return {ErrorCode::InvalidArgument, "invalid status"};
+        case RdbOpResult::InvalidScope:    return {ErrorCode::InvalidArgument, "invalid scope"};
+        case RdbOpResult::InvalidMethod:   return {ErrorCode::InvalidArgument, "invalid method"};
+        case RdbOpResult::InvalidDirection:return {ErrorCode::InvalidArgument, "invalid direction"};
+        case RdbOpResult::InvalidPolarity: return {ErrorCode::InvalidArgument, "invalid polarity"};
+        case RdbOpResult::MissingEvidence: return {ErrorCode::InvalidArgument,
+            "confirmed/refuted status requires a method and non-empty evidence"};
+        case RdbOpResult::Referenced:      return {ErrorCode::InvalidArgument,
+            "cannot remove: another active entry supersedes it"};
+        case RdbOpResult::InvalidThesis:   return {ErrorCode::InvalidArgument, "empty thesis"};
+    }
+    return {ErrorCode::OperationFailed, "unknown rdb error"};
+}
+
+RdbProtocolResult protocolEntryToResult(const RdbProtocolEntry &e)
+{
+    RdbProtocolResult r;
+    r.id           = e.id;
+    r.timestamp    = normalizeRdbText(e.timestamp);
+    r.thesis       = normalizeRdbText(e.thesis);
+    r.status       = protocolStatusToString(e.status);
+    r.scope        = protocolScopeToString(e.scope);
+    r.hasAddress   = e.hasAddress;
+    r.address      = e.address;
+    r.hasMethod    = e.hasMethod;
+    r.method       = e.hasMethod ? protocolMethodToString(e.method) : std::string();
+    r.evidence     = normalizeRdbText(e.evidence);
+    r.links        = e.links;
+    r.supersedes   = e.supersedes;
+    r.supersededBy = e.supersededBy;
+    return r;
+}
+
+RdbPortResult portEntryToResult(const RdbPortEntry &p)
+{
+    RdbPortResult r;
+    r.port      = p.port;
+    r.name      = normalizeRdbText(p.name);
+    r.direction = portDirectionToString(p.direction);
+    r.polarity  = portPolarityToString(p.polarity);
+    for (const auto &b : p.bits) {
+        RdbPortBitInput bi;
+        bi.index   = b.index;
+        bi.meaning = normalizeRdbText(b.meaning);
+        r.bits.push_back(std::move(bi));
+    }
+    r.comment = normalizeRdbText(p.comment);
+    return r;
+}
+
+RdbWatchResult watchEntryToResult(const RdbWatchEntry &w)
+{
+    RdbWatchResult r;
+    r.name            = normalizeRdbText(w.name);
+    r.address         = w.address;
+    r.length          = w.length;
+    r.format          = normalizeRdbText(w.format);
+    r.hasObjectAddress = w.hasObjectAddress;
+    r.objectAddress   = w.objectAddress;
+    return r;
+}
+
 } // anonymous namespace
 
 AgentApiResult<RdbInfoResult> AgentApi::getRdbInfo()
@@ -2552,10 +2623,18 @@ AgentApiResult<RdbInfoResult> AgentApi::getRdbInfo()
     info.romSize   = rom.size;
     info.romSha256 = rom.sha256;
 
+    // -- Stage 6.28 knowledge-section counts --------------------------------
+    info.protocolCount = rdb.protocolCount();
+    info.portCount     = rdb.portCount();
+    info.watchCount    = rdb.watchCount();
+
     std::ostringstream oss;
     oss << "objects=" << info.objectCount
         << " dirty=" << info.dirty
-        << " platform=" << info.platform;
+        << " platform=" << info.platform
+        << " proto=" << info.protocolCount
+        << " ports=" << info.portCount
+        << " watch=" << info.watchCount;
     log_.record("getRdbInfo", "", oss.str(), elapsedMs(t0));
 
     return AgentApiResult<RdbInfoResult>::ok(std::move(info));
@@ -2875,6 +2954,366 @@ AgentApiResult<std::vector<uint16_t>> AgentApi::getRdbLinks(uint16_t sourceAddre
     log_.record("getRdbLinks", oss.str(), "ok", elapsedMs(t0));
 
     return AgentApiResult<std::vector<uint16_t>>::ok(std::move(links));
+}
+
+// ---------------------------------------------------------------------------
+// RDB Knowledge sections: protocol / ports / watchlist (Stage 6.28)
+//
+// Thin mapping over RdbController. Enum strings are parsed here; an unknown
+// string becomes InvalidArgument before reaching the controller. The §4.4
+// evidence rule is enforced by the controller and surfaced as InvalidArgument.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Build an RdbProtocolEntry from agent-facing strings. Returns a failure
+// AgentApiResult-shaped pair via outError when an enum string is invalid.
+bool buildProtocolEntry(const std::string &thesis, const std::string &status,
+                        const std::string &scope, bool hasAddress, uint16_t address,
+                        const std::string &method, const std::string &evidence,
+                        RdbProtocolEntry &out, std::string &outError)
+{
+    out = RdbProtocolEntry();
+    out.thesis = thesis;
+
+    ProtocolStatus st;
+    if (!parseProtocolStatus(status, st)) {
+        outError = "invalid status '" + status + "'";
+        return false;
+    }
+    out.status = st;
+
+    if (!scope.empty()) {
+        ProtocolScope sc;
+        if (!parseProtocolScope(scope, sc)) {
+            outError = "invalid scope '" + scope + "'";
+            return false;
+        }
+        out.scope = sc;
+    } else {
+        out.scope = ProtocolScope::Rom;
+    }
+
+    out.hasAddress = hasAddress;
+    out.address    = address;
+
+    if (!method.empty()) {
+        ProtocolMethod m;
+        if (!parseProtocolMethod(method, m)) {
+            outError = "invalid method '" + method + "'";
+            return false;
+        }
+        out.hasMethod = true;
+        out.method    = m;
+    }
+    out.evidence = evidence;
+    return true;
+}
+
+} // anonymous namespace
+
+AgentApiResult<RdbProtocolResult> AgentApi::addProtocolEntry(
+    const std::string &thesis, const std::string &status, const std::string &scope,
+    bool hasAddress, uint16_t address,
+    const std::string &method, const std::string &evidence)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbProtocolEntry entry;
+    std::string parseErr;
+    if (!buildProtocolEntry(thesis, status, scope, hasAddress, address,
+                            method, evidence, entry, parseErr)) {
+        log_.record("addProtocolEntry", parseErr, "invalid enum", elapsedMs(t0),
+                    false, parseErr);
+        return AgentApiResult<RdbProtocolResult>::fail(ErrorCode::InvalidArgument, parseErr);
+    }
+
+    RdbOpResult r = rdb.addProtocolEntry(entry);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        log_.record("addProtocolEntry", "thesis=\"" + thesis + "\"",
+                    err.second, elapsedMs(t0), false, err.second);
+        return AgentApiResult<RdbProtocolResult>::fail(err.first, err.second);
+    }
+
+    log_.record("addProtocolEntry", "id=" + entry.id, "ok", elapsedMs(t0));
+    return AgentApiResult<RdbProtocolResult>::ok(protocolEntryToResult(entry));
+}
+
+AgentApiResult<RdbProtocolResult> AgentApi::supersedeProtocolEntry(
+    const std::string &supersededId,
+    const std::string &thesis, const std::string &status, const std::string &scope,
+    bool hasAddress, uint16_t address,
+    const std::string &method, const std::string &evidence)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbProtocolEntry entry;
+    std::string parseErr;
+    if (!buildProtocolEntry(thesis, status, scope, hasAddress, address,
+                            method, evidence, entry, parseErr)) {
+        log_.record("supersedeProtocolEntry", parseErr, "invalid enum", elapsedMs(t0),
+                    false, parseErr);
+        return AgentApiResult<RdbProtocolResult>::fail(ErrorCode::InvalidArgument, parseErr);
+    }
+
+    std::string newId;
+    RdbOpResult r = rdb.supersedeProtocolEntry(supersededId, entry, newId);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        log_.record("supersedeProtocolEntry", "target=" + supersededId,
+                    err.second, elapsedMs(t0), false, err.second);
+        return AgentApiResult<RdbProtocolResult>::fail(err.first, err.second);
+    }
+
+    const RdbProtocolEntry *saved = rdb.findProtocolEntry(newId);
+    log_.record("supersedeProtocolEntry", "target=" + supersededId + " new=" + newId,
+                "ok", elapsedMs(t0));
+    return AgentApiResult<RdbProtocolResult>::ok(
+        protocolEntryToResult(saved ? *saved : entry));
+}
+
+AgentApiResult<std::vector<RdbProtocolResult>> AgentApi::getProtocol(
+    const std::string &substring, const std::string &status,
+    const std::string &scope,
+    bool hasAddress, uint16_t address,
+    bool activeOnly, size_t maxEntries)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    ProtocolFilter filter;
+    if (!status.empty()) {
+        ProtocolStatus st;
+        if (!parseProtocolStatus(status, st)) {
+            std::string e = "invalid status '" + status + "'";
+            log_.record("getProtocol", e, "invalid enum", elapsedMs(t0), false, e);
+            return AgentApiResult<std::vector<RdbProtocolResult>>::fail(
+                ErrorCode::InvalidArgument, e);
+        }
+        filter.hasStatus = true;
+        filter.status    = st;
+    }
+    if (!scope.empty()) {
+        ProtocolScope sc;
+        if (!parseProtocolScope(scope, sc)) {
+            std::string e = "invalid scope '" + scope + "'";
+            log_.record("getProtocol", e, "invalid enum", elapsedMs(t0), false, e);
+            return AgentApiResult<std::vector<RdbProtocolResult>>::fail(
+                ErrorCode::InvalidArgument, e);
+        }
+        filter.hasScope = true;
+        filter.scope    = sc;
+    }
+    filter.hasAddress = hasAddress;
+    filter.address    = address;
+    filter.activeOnly = activeOnly;
+    filter.substring  = substring;
+
+    size_t cap = maxEntries == 0 ? AgentLimits::MAX_PROTOCOL_ENTRIES_DEFAULT
+                                 : std::min(maxEntries, AgentLimits::MAX_PROTOCOL_ENTRIES_HARD);
+    filter.maxEntries = cap;
+
+    auto entries = rdb.getProtocol(filter);
+
+    std::vector<RdbProtocolResult> result;
+    result.reserve(entries.size());
+    for (const auto &e : entries) result.push_back(protocolEntryToResult(e));
+
+    std::ostringstream oss;
+    oss << "matched=" << result.size() << " cap=" << cap;
+    log_.record("getProtocol", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<std::vector<RdbProtocolResult>>::ok(std::move(result));
+}
+
+AgentApiResult<void> AgentApi::updateProtocolStatus(
+    const std::string &id, const std::string &status,
+    const std::string &method, const std::string &evidence)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    ProtocolStatus st;
+    if (!parseProtocolStatus(status, st)) {
+        std::string e = "invalid status '" + status + "'";
+        log_.record("updateProtocolStatus", e, "invalid enum", elapsedMs(t0), false, e);
+        return AgentApiResult<void>::fail(ErrorCode::InvalidArgument, e);
+    }
+
+    bool hasMethod = !method.empty();
+    ProtocolMethod m = ProtocolMethod::Trace;
+    if (hasMethod) {
+        if (!parseProtocolMethod(method, m)) {
+            std::string e = "invalid method '" + method + "'";
+            log_.record("updateProtocolStatus", e, "invalid enum", elapsedMs(t0), false, e);
+            return AgentApiResult<void>::fail(ErrorCode::InvalidArgument, e);
+        }
+    }
+
+    RdbOpResult r = rdb.updateProtocolStatus(id, st, hasMethod, m, evidence);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        log_.record("updateProtocolStatus", "id=" + id, err.second,
+                    elapsedMs(t0), false, err.second);
+        return AgentApiResult<void>::fail(err.first, err.second);
+    }
+
+    log_.record("updateProtocolStatus", "id=" + id + " status=" + status, "ok", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::removeProtocolEntry(const std::string &id)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbOpResult r = rdb.removeProtocolEntry(id);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        log_.record("removeProtocolEntry", "id=" + id, err.second,
+                    elapsedMs(t0), false, err.second);
+        return AgentApiResult<void>::fail(err.first, err.second);
+    }
+
+    log_.record("removeProtocolEntry", "id=" + id, "ok", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<RdbPortResult> AgentApi::upsertPort(
+    uint8_t port, const std::string &name,
+    const std::string &direction, const std::string &polarity,
+    const std::vector<RdbPortBitInput> &bits, const std::string &comment)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbPortEntry entry;
+    entry.port = port;
+    entry.name = name;
+
+    PortDirection d;
+    if (!parsePortDirection(direction, d)) {
+        std::string e = "invalid direction '" + direction + "'";
+        log_.record("upsertPort", e, "invalid enum", elapsedMs(t0), false, e);
+        return AgentApiResult<RdbPortResult>::fail(ErrorCode::InvalidArgument, e);
+    }
+    entry.direction = d;
+
+    PortPolarity pol;
+    if (!parsePortPolarity(polarity, pol)) {
+        std::string e = "invalid polarity '" + polarity + "'";
+        log_.record("upsertPort", e, "invalid enum", elapsedMs(t0), false, e);
+        return AgentApiResult<RdbPortResult>::fail(ErrorCode::InvalidArgument, e);
+    }
+    entry.polarity = pol;
+
+    if (bits.size() > AgentLimits::MAX_PORT_BITS) {
+        std::string e = "too many port bits (max " + std::to_string(AgentLimits::MAX_PORT_BITS) + ")";
+        log_.record("upsertPort", e, "limit exceeded", elapsedMs(t0), false, e);
+        return AgentApiResult<RdbPortResult>::fail(ErrorCode::InvalidArgument, e);
+    }
+    for (const auto &b : bits) {
+        if (b.index < 0 || b.index > 7) {
+            std::string e = "port bit index out of range 0..7";
+            log_.record("upsertPort", e, "invalid argument", elapsedMs(t0), false, e);
+            return AgentApiResult<RdbPortResult>::fail(ErrorCode::InvalidArgument, e);
+        }
+        RdbPortBit pb;
+        pb.index   = b.index;
+        pb.meaning = b.meaning;
+        entry.bits.push_back(std::move(pb));
+    }
+    entry.comment = comment;
+
+    RdbOpResult r = rdb.upsertPort(entry);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        std::ostringstream oss;
+        oss << "port=0x" << std::hex << static_cast<int>(port);
+        log_.record("upsertPort", oss.str(), err.second, elapsedMs(t0), false, err.second);
+        return AgentApiResult<RdbPortResult>::fail(err.first, err.second);
+    }
+
+    const RdbPortEntry *saved = rdb.getPort(port);
+    std::ostringstream oss;
+    oss << "port=0x" << std::hex << static_cast<int>(port);
+    log_.record("upsertPort", oss.str(), "ok", elapsedMs(t0));
+    return AgentApiResult<RdbPortResult>::ok(portEntryToResult(saved ? *saved : entry));
+}
+
+AgentApiResult<std::vector<RdbPortResult>> AgentApi::getPorts()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    auto all = rdb.listPorts();
+    std::vector<RdbPortResult> result;
+    result.reserve(all.size());
+    for (const auto &p : all) result.push_back(portEntryToResult(p));
+
+    log_.record("getPorts", "", std::to_string(result.size()) + " ports", elapsedMs(t0));
+    return AgentApiResult<std::vector<RdbPortResult>>::ok(std::move(result));
+}
+
+AgentApiResult<RdbWatchResult> AgentApi::addWatchEntry(
+    const std::string &name, uint16_t address, uint32_t length,
+    const std::string &format, bool hasObjectAddress, uint16_t objectAddress)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbWatchEntry entry;
+    entry.name     = name;
+    entry.address  = address;
+    entry.length   = length == 0 ? 1 : length;
+    entry.format   = format.empty() ? std::string("uint8") : format;
+    entry.hasObjectAddress = hasObjectAddress;
+    entry.objectAddress    = objectAddress;
+
+    RdbOpResult r = rdb.addWatchEntry(entry);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        log_.record("addWatchEntry", "name=" + name, err.second,
+                    elapsedMs(t0), false, err.second);
+        return AgentApiResult<RdbWatchResult>::fail(err.first, err.second);
+    }
+
+    log_.record("addWatchEntry", "name=" + name, "ok", elapsedMs(t0));
+    return AgentApiResult<RdbWatchResult>::ok(watchEntryToResult(entry));
+}
+
+AgentApiResult<void> AgentApi::removeWatchEntry(const std::string &name)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbOpResult r = rdb.removeWatchEntry(name);
+    if (r != RdbOpResult::None) {
+        auto err = mapRdbOpError(r);
+        log_.record("removeWatchEntry", "name=" + name, err.second,
+                    elapsedMs(t0), false, err.second);
+        return AgentApiResult<void>::fail(err.first, err.second);
+    }
+
+    log_.record("removeWatchEntry", "name=" + name, "ok", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<std::vector<RdbWatchResult>> AgentApi::listWatch()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    auto all = rdb.listWatch();
+    std::vector<RdbWatchResult> result;
+    result.reserve(all.size());
+    for (const auto &w : all) result.push_back(watchEntryToResult(w));
+
+    log_.record("listWatch", "", std::to_string(result.size()) + " entries", elapsedMs(t0));
+    return AgentApiResult<std::vector<RdbWatchResult>>::ok(std::move(result));
 }
 
 // ---------------------------------------------------------------------------

@@ -444,7 +444,11 @@ json rdbInfoToJson(const RdbInfoResult &info) {
         {"object_count", static_cast<int>(info.objectCount)},
         {"rom_file",     info.romFile},
         {"rom_size",     info.romSize},
-        {"rom_sha256",   info.romSha256}
+        {"rom_sha256",   info.romSha256},
+        // -- Stage 6.28 knowledge-section counts ----------------------------
+        {"protocol_count", static_cast<int>(info.protocolCount)},
+        {"port_count",     static_cast<int>(info.portCount)},
+        {"watch_count",    static_cast<int>(info.watchCount)}
     };
 }
 
@@ -485,6 +489,74 @@ json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links) {
         {"source", static_cast<int>(source)},
         {"links",  linksArr}
     };
+}
+
+// ---------------------------------------------------------------------------
+// RDB Knowledge sections (Stage 6.28): protocol / ports / watchlist
+// ---------------------------------------------------------------------------
+
+json protocolEntryToJson(const RdbProtocolResult &e) {
+    json linksArr = json::array();
+    for (const auto &l : e.links) linksArr.push_back(l);
+    json j = {
+        {"id",        e.id},
+        {"timestamp", e.timestamp},
+        {"thesis",    e.thesis},
+        {"status",    e.status},
+        {"scope",     e.scope},
+        {"evidence",  e.evidence},
+        {"links",     linksArr},
+        {"supersedes",   e.supersedes},
+        {"superseded_by", e.supersededBy},
+        {"active",    e.supersededBy.empty()}
+    };
+    if (e.hasAddress) j["address"] = hex16(e.address);
+    if (e.hasMethod)  j["method"]  = e.method;
+    return j;
+}
+
+json protocolEntriesToJson(const std::vector<RdbProtocolResult> &entries) {
+    json arr = json::array();
+    for (const auto &e : entries) arr.push_back(protocolEntryToJson(e));
+    return arr;
+}
+
+json portEntryToJson(const RdbPortResult &p) {
+    json bitsArr = json::array();
+    for (const auto &b : p.bits) {
+        bitsArr.push_back({{"bit", b.index}, {"meaning", b.meaning}});
+    }
+    return {
+        {"port",      hex8(p.port)},
+        {"name",      p.name},
+        {"direction", p.direction},
+        {"polarity",  p.polarity},
+        {"bits",      bitsArr},
+        {"comment",   p.comment}
+    };
+}
+
+json portsToJson(const std::vector<RdbPortResult> &ports) {
+    json arr = json::array();
+    for (const auto &p : ports) arr.push_back(portEntryToJson(p));
+    return arr;
+}
+
+json watchEntryToJson(const RdbWatchResult &w) {
+    json j = {
+        {"name",    w.name},
+        {"address", hex16(w.address)},
+        {"length",  w.length},
+        {"format",  w.format}
+    };
+    if (w.hasObjectAddress) j["object_address"] = hex16(w.objectAddress);
+    return j;
+}
+
+json watchListToJson(const std::vector<RdbWatchResult> &entries) {
+    json arr = json::array();
+    for (const auto &w : entries) arr.push_back(watchEntryToJson(w));
+    return arr;
 }
 
 // ---------------------------------------------------------------------------

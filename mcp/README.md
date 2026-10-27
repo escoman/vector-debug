@@ -47,7 +47,8 @@ All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi meth
 > The authoritative tool list is what the server returns from `tools/list` — clients must
 > not hardcode the count. Machine-readable capability marker: `v06c.api_version` in the
 > `initialize` result (2 = Stage 6.26 batch analysis tools, 3 = Stage 6.27 raster/beam
-> debugging tools, 4 = `debug_get_server_info` build provenance, 5 = RST 7 / INT log). The grouped tables below were
+> debugging tools, 4 = `debug_get_server_info` build provenance, 5 = RST 7 / INT log,
+> 6 = Stage 6.28 RDB knowledge tools — protocol / ports / watchlist). The grouped tables below were
 > written for Stage 6.4 and do not list every tool added in Stages 6.11–6.25; the
 > Stage 6.26 batch tools and Stage 6.27 raster/beam tools are documented at the end of
 > this section.

@@ -4,9 +4,13 @@
 #include "rom_load_address.h"
 #include "rdb_controller.h"
 #include "png_encoder.h"
+#include "sha256.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -197,6 +201,89 @@ AgentApiResult<void> AgentApi::writeMemory(uint16_t address, const std::vector<u
             ErrorCode::OperationFailed, "Memory write failed");
     }
     return AgentApiResult<void>::ok();
+}
+
+// ---------------------------------------------------------------------------
+// Memory dump to file
+//
+// Raw binary dump of a memory range (default: the full 64K address space)
+// written straight to disk.  The bytes never travel through the JSON/MCP
+// transport, so a full-memory dump cannot be truncated the way a large
+// debug_read_memory_range response can.
+// ---------------------------------------------------------------------------
+
+AgentApiResult<MemoryDumpResult> AgentApi::dumpMemory(const std::string &path,
+                                                      uint16_t address,
+                                                      size_t length)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    auto fail = [&](ErrorCode code, const std::string &message) {
+        log_.record("dumpMemory", path, "failed", elapsedMs(t0), false, message);
+        return AgentApiResult<MemoryDumpResult>::fail(code, message);
+    };
+
+    if (path.empty()) {
+        return fail(ErrorCode::InvalidArgument, "dump path is empty");
+    }
+
+    // Stage 6.3: overflow check (a zero-length range is not a dump at all)
+    uint32_t endAddr = static_cast<uint32_t>(address) + length;
+    if (length == 0 || endAddr > 0x10000) {
+        return fail(ErrorCode::InvalidRange,
+                    "address + length exceeds 64K address space");
+    }
+
+    // Same read path as readMemory(): the backend's callback-free peek, so the
+    // dump is safe to take while the CPU runs (Memory::onread is never touched).
+    auto snap = backend_.readMemorySnapshot(address, length);
+    if (snap.data.size() != length) {
+        return fail(ErrorCode::OperationFailed,
+                    "memory read returned " + std::to_string(snap.data.size()) +
+                    " of " + std::to_string(length) + " bytes");
+    }
+
+    // Atomic write, same pattern as RdbController::saveAs(): dump to <path>.tmp,
+    // then rename over the destination.  std::filesystem::rename replaces an
+    // existing file on Windows too, where the CRT ::rename does not.
+    std::string tmpPath = path + ".tmp";
+    {
+        std::ofstream file(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) {
+            return fail(ErrorCode::OperationFailed,
+                        "cannot open dump file for writing: " + tmpPath);
+        }
+        file.write(reinterpret_cast<const char *>(snap.data.data()),
+                   static_cast<std::streamsize>(snap.data.size()));
+        file.close();
+        if (file.fail()) {
+            std::remove(tmpPath.c_str());
+            return fail(ErrorCode::OperationFailed,
+                        "failed writing dump file: " + tmpPath);
+        }
+    }
+
+    std::error_code rec;
+    std::filesystem::rename(tmpPath, path, rec);
+    if (rec) {
+        std::error_code rim;
+        std::filesystem::remove(tmpPath, rim);
+        return fail(ErrorCode::OperationFailed,
+                    "cannot move dump into place: " + path + " (" + rec.message() + ")");
+    }
+
+    MemoryDumpResult result;
+    result.path         = path;
+    result.startAddress = address;
+    result.length       = static_cast<uint32_t>(snap.data.size());
+    result.sha256       = Sha256::bufferDigest(snap.data.data(), snap.data.size());
+
+    std::ostringstream oss;
+    oss << "addr=0x" << std::hex << address << "..0x" << (endAddr - 1)
+        << std::dec << " -> " << path << " (" << result.length << " bytes)";
+    log_.record("dumpMemory", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<MemoryDumpResult>::ok(std::move(result));
 }
 
 // ---------------------------------------------------------------------------

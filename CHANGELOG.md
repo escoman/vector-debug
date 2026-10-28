@@ -10,6 +10,18 @@ The top-most `## [X.Y.Z]` section is used as the GitHub Release notes body
 Prepend new versions at the top; keep this first HTML comment free of `## [` lines.
 -->
 
+## [Unreleased]
+
+### Added
+- `debug_dump_memory` — MCP tool that writes a raw binary dump of a memory range
+  (default: the full 64K address space, `0x0000..0xFFFF`) straight to a file and
+  returns only `{path, address, length, sha256}`. A whole-memory dump no longer has to
+  be assembled from `debug_read_memory_range` chunks, and the bytes never travel
+  through the JSON transport, so large reads can no longer be truncated client-side.
+  The write is atomic (`<path>.tmp` + rename, the `RdbController::saveAs` pattern) and
+  the SHA-256 digest lets a caller verify the file afterwards. Bumps `v06c.api_version`
+  to 7.
+
 ## [0.6.7] - 2026-10-24
 
 Trustworthy screen snapshots when the debugger stops inside a frame: `debug_get_screen_snapshot`

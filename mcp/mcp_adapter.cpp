@@ -20,6 +20,22 @@
 #include <unistd.h>   // getpid()
 
 // ---------------------------------------------------------------------------
+// v06c.api_version — machine-readable capability marker (Stage 6.26 §4)
+//
+// Reported both in the `initialize` capabilities and by debug_get_server_info,
+// so it is defined exactly once here instead of being hardcoded twice.
+// Bump when new tools or result fields are added:
+//   2 = Stage 6.26 batch analysis tools
+//   3 = Stage 6.27 raster/beam debugging tools
+//   4 = debug_get_server_info build-provenance tool
+//   5 = debug_get_int_events / debug_clear_int_events (RST 7 / INT log)
+//   6 = Stage 6.28 RDB knowledge tools (protocol / ports / watchlist)
+//   7 = debug_dump_memory (raw binary memory dump written to a file)
+// ---------------------------------------------------------------------------
+
+static constexpr int V06C_API_VERSION = 7;
+
+// ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
@@ -31,18 +47,12 @@ McpServer::McpServer(AgentApi &api)
     conf.version = VDB_VERSION;
     server_ = std::make_unique<mcp::server>(conf);
     server_->set_server_info("v06c-mcp", VDB_VERSION);
-    // Stage 6.26 §4: capability discovery.  tools/list always reflects the
-    // actually registered tools (server_->get_tools()); the machine-readable
-    // v06c.api_version lets clients detect batch-analysis capability without
-    // guessing from the binary version.  Bump api_version when new tools or
-    // result fields are added: 2 = Stage 6.26 batch analysis tools,
-    // 3 = Stage 6.27 raster/beam debugging tools,
-    // 4 = debug_get_server_info build-provenance tool,
-    // 5 = debug_get_int_events / debug_clear_int_events (RST 7 / INT log),
-    // 6 = Stage 6.28 RDB knowledge tools (protocol / ports / watchlist).
+    // Capability discovery: tools/list always reflects the actually registered
+    // tools (server_->get_tools()); v06c.api_version lets clients detect a
+    // capability without guessing from the binary version.
     server_->set_capabilities({
         {"tools", {{"listChanged", false}}},
-        {"v06c",  {{"api_version", 6}}}
+        {"v06c",  {{"api_version", V06C_API_VERSION}}}
     });
 }
 
@@ -437,7 +447,7 @@ void McpServer::registerMemoryTools() {
             .with_description("Read a contiguous range of memory bytes in a single call. "
                               "Use for bulk ROM data access instead of repeated debug_read_memory.")
             .with_number_param("address", "Start address (0..65535)")
-            .with_number_param("length", "Number of bytes to read (1..16384)")
+            .with_number_param("length", "Number of bytes to read (1..65536)")
             .build();
         addNumericConstraint(tool, "address", 0, 65535);
         addNumericConstraint(tool, "length", 1, static_cast<int>(AgentLimits::MAX_MEMORY_READ_RANGE));
@@ -464,6 +474,56 @@ void McpServer::registerMemoryTools() {
                 {"address", mcp_json::hex16(addr)},
                 {"length",  static_cast<int>(r.value.size())},
                 {"data",    dataArr}
+            });
+        });
+    }
+
+    // debug_dump_memory
+    //
+    // Raw binary dump to a file.  A full 64K response through debug_read_memory_range
+    // is ~65K JSON numbers — bulky, and clients truncate it — so the bytes go
+    // straight to disk here and only the metadata comes back.
+    {
+        auto tool = mcp::tool_builder("debug_dump_memory")
+            .with_description("Dump a contiguous memory range as a raw binary file. "
+                              "Defaults to the full 64K address space (0x0000..0xFFFF). "
+                              "Prefer this over debug_read_memory_range for whole-memory "
+                              "dumps: the bytes are written verbatim to 'path' and only "
+                              "metadata (path, address, length, sha256) is returned, so "
+                              "nothing is truncated in transport.")
+            .with_string_param("path", "Output file path (raw binary dump, overwritten if it exists)")
+            .with_number_param("address", "Start address (0..65535, default 0)", false)
+            .with_number_param("length", "Number of bytes to dump (1..65536, default 65536)", false)
+            .build();
+        addNumericConstraint(tool, "address", 0, 65535);
+        addNumericConstraint(tool, "length", 1, static_cast<int>(AgentLimits::MAX_MEMORY_READ_RANGE));
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            if (!params.contains("path") || !params["path"].is_string()) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "missing required parameter: path (string)");
+            }
+            std::string path = params["path"].get<std::string>();
+            uint16_t addr = params.contains("address") ? getAddress(params, "address") : 0x0000;
+            size_t length = getCount(params, "length", AgentLimits::MAX_MEMORY_READ_RANGE);
+            if (length == 0) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "length must be >= 1");
+            }
+            if (length > AgentLimits::MAX_MEMORY_READ_RANGE) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "length exceeds maximum (" + std::to_string(AgentLimits::MAX_MEMORY_READ_RANGE) + ")");
+            }
+            uint32_t endAddr = static_cast<uint32_t>(addr) + length;
+            if (endAddr > 0x10000) {
+                return errorContent("invalid_range",
+                    "address + length exceeds 64K address space");
+            }
+            auto r = api_.dumpMemory(path, addr, length);
+            if (!r.success) return errorContent("dump_memory_failed", r.error_message);
+            return textContent({
+                {"path",    r.value.path},
+                {"address", mcp_json::hex16(r.value.startAddress)},
+                {"length",  static_cast<int>(r.value.length)},
+                {"sha256",  r.value.sha256}
             });
         });
     }
@@ -2513,7 +2573,7 @@ void McpServer::registerServerTools() {
                 {"gitState",   VDB_GIT_DIRTY},
                 {"buildSeq",   VDB_BUILD_SEQ},
                 {"buildTime",  VDB_BUILD_TIME},
-                {"apiVersion", 6},
+                {"apiVersion", V06C_API_VERSION},
                 {"pid",        static_cast<int>(::getpid())},
                 {"startedAt",  isoUtc(bootTime_)},
                 {"uptimeSec",  static_cast<int>(now - bootTime_)}

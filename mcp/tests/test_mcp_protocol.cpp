@@ -11,10 +11,14 @@
 #include "mcp_json.h"
 #include "agent_api.h"
 #include "mock_backend_for_agent.h"
+#include "test_tmp_dir.h"   // portable temp paths for the debug_dump_memory tests
+#include "sha256.h"         // digest verification of the dumped bytes
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 #include <set>
@@ -131,14 +135,15 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // ---------------------------------------------------------------------------
 
 void test_all_tools_registered() {
-    TEST_BEGIN("all 86 tools registered");
+    TEST_BEGIN("all 87 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
     // Stage 6.26: 70, Stage 6.27 raster/beam (beam_state, screen_snapshot,
     // raster_events) = 73, + debug_get_server_info (build provenance) = 74,
     // + debug_get_int_events / debug_clear_int_events (RST 7 / INT log) = 76,
-    // + Stage 6.28 knowledge tools (protocol/ports/watchlist) = 86
-    CHECK_EQ(static_cast<int>(names.size()), 86, "should have 86 tools");
+    // + Stage 6.28 knowledge tools (protocol/ports/watchlist) = 86,
+    // + debug_dump_memory (raw binary memory dump) = 87
+    CHECK_EQ(static_cast<int>(names.size()), 87, "should have 87 tools");
     // tools/list must reflect reality: no duplicates in registration
     std::set<std::string> unique(names.begin(), names.end());
     CHECK_EQ(static_cast<int>(unique.size()), static_cast<int>(names.size()),
@@ -160,7 +165,9 @@ void test_all_tools_registered() {
                           "debug_get_ports",
                           "debug_add_watch_entry",
                           "debug_remove_watch_entry",
-                          "debug_list_watch"}) {
+                          "debug_list_watch",
+                          // Raw binary memory dump to a file
+                          "debug_dump_memory"}) {
         CHECK(unique.count(t) == 1, std::string("registered: ") + t);
     }
     TEST_END();
@@ -215,6 +222,8 @@ void test_expected_tools_exist() {
         "debug_add_rdb_link", "debug_remove_rdb_link", "debug_get_rdb_links",
         // Stage 6.16: Reverse Engineering Primitives
         "debug_read_memory_range", "debug_analyze_code",
+        // Raw binary memory dump to a file
+        "debug_dump_memory",
         // Stage 6.18: Range Disassembly
         "debug_disassemble_range",
         // Stage 6.20: Runtime Memory Analysis
@@ -374,6 +383,122 @@ void test_debug_write_memory() {
     CHECK(readData["bytes"][0] == 0xAA, "first byte should be 0xAA");
     CHECK(readData["bytes"][1] == 0xBB, "second byte should be 0xBB");
     CHECK(readData["bytes"][2] == 0xCC, "third byte should be 0xCC");
+    TEST_END();
+}
+
+void test_debug_dump_memory_full() {
+    TEST_BEGIN("debug_dump_memory writes the full 64K dump to a file");
+    Fixture f;
+    std::string dumpPath = testTmpPath("mcp_dump_memory_full.bin");
+    testRemoveTree(dumpPath);
+
+    auto result = f.mcp.callTool("debug_dump_memory", {{"path", dumpPath}});
+    CHECK(!isErrorContent(result), "dump should succeed");
+    auto data = parseTextAsJson(result);
+    CHECK(data["address"] == "0x0000", "default start address is 0x0000");
+    CHECK(data["length"] == 0x10000, "full 64K dumped");
+    CHECK(data.is_object() && data["path"].is_string() &&
+              data["path"].get<std::string>() == dumpPath,
+          "path echoed back");
+
+    // The file holds exactly 64K of the mock's memory image
+    std::ifstream file(dumpPath, std::ios::binary);
+    CHECK(file.is_open(), "dump file readable");
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    CHECK_EQ(static_cast<int>(bytes.size()), 0x10000, "file holds 65536 bytes");
+    if (bytes.size() >= 0x0103) {
+        CHECK_EQ(static_cast<int>(bytes[0x0100]), 0x31, "0x0100 = LXI SP opcode");
+        CHECK_EQ(static_cast<int>(bytes[0x0102]), 0xF8, "0x0102 = LXI SP high byte");
+    }
+
+    // The reported digest matches the bytes actually written to disk
+    std::string sha;
+    if (data.is_object() && data["sha256"].is_string()) {
+        sha = data["sha256"].get<std::string>();
+    }
+    CHECK_EQ(static_cast<int>(sha.size()), 64, "sha256 is 64 hex chars");
+    CHECK(sha == Sha256::bufferDigest(bytes.data(), bytes.size()),
+          "sha256 matches file content");
+
+    testRemoveTree(dumpPath);
+    TEST_END();
+}
+
+void test_debug_dump_memory_range() {
+    TEST_BEGIN("debug_dump_memory dumps an explicit range");
+    Fixture f;
+    std::string dumpPath = testTmpPath("mcp_dump_memory_range.bin");
+    testRemoveTree(dumpPath);
+
+    auto result = f.mcp.callTool("debug_dump_memory",
+        {{"path", dumpPath}, {"address", 0x0100}, {"length", 4}});
+    CHECK(!isErrorContent(result), "range dump should succeed");
+    auto data = parseTextAsJson(result);
+    CHECK(data["address"] == "0x0100", "address echoed as hex");
+    CHECK(data["length"] == 4, "length echoed");
+
+    std::ifstream file(dumpPath, std::ios::binary);
+    CHECK(file.is_open(), "dump file readable");
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    CHECK_EQ(static_cast<int>(bytes.size()), 4, "4 bytes dumped");
+    // LXI SP,0xF800 (31 00 F8) + MVI A,0x55 (3E) from the mock's program
+    const uint8_t expected[] = {0x31, 0x00, 0xF8, 0x3E};
+    CHECK(bytes.size() == sizeof(expected) &&
+              memcmp(bytes.data(), expected, sizeof(expected)) == 0,
+          "dumped bytes match memory");
+
+    // Cross-check against the chunked reader: same bytes, no truncation either way
+    auto rangeResult = f.mcp.callTool("debug_read_memory_range",
+        {{"address", 0x0100}, {"length", 4}});
+    auto rangeData = parseTextAsJson(rangeResult);
+    bool same = rangeData.is_object() && rangeData["data"].is_array() &&
+                rangeData["data"].size() == 4 && bytes.size() == 4;
+    for (size_t i = 0; same && i < bytes.size(); ++i) {
+        if (rangeData["data"][i].get<int>() != static_cast<int>(bytes[i])) same = false;
+    }
+    CHECK(same, "dump equals debug_read_memory_range bytes");
+
+    testRemoveTree(dumpPath);
+    TEST_END();
+}
+
+void test_debug_dump_memory_errors() {
+    TEST_BEGIN("debug_dump_memory rejects bad params and unwritable paths");
+    Fixture f;
+
+    // Missing path → invalid_params
+    bool threw = false;
+    try {
+        f.mcp.callTool("debug_dump_memory", {{"address", 0x0000}});
+    } catch (const mcp::mcp_exception &) { threw = true; }
+    CHECK(threw, "missing path throws");
+
+    // Zero length → invalid_params
+    threw = false;
+    try {
+        f.mcp.callTool("debug_dump_memory",
+            {{"path", testTmpPath("mcp_dump_memory_zero.bin")}, {"length", 0}});
+    } catch (const mcp::mcp_exception &) { threw = true; }
+    CHECK(threw, "zero length throws");
+
+    // address + length beyond the 64K space → invalid_range (error content, not a throw)
+    auto overflow = f.mcp.callTool("debug_dump_memory",
+        {{"path", testTmpPath("mcp_dump_memory_overflow.bin")},
+         {"address", 0xF000}, {"length", 0x2000}});
+    CHECK(isErrorContent(overflow), "overflow reports an error");
+    auto overflowData = parseTextAsJson(overflow);
+    CHECK(overflowData["error_code"] == "invalid_range", "error_code is invalid_range");
+
+    // Unwritable destination (no such directory) → dump_memory_failed, no litter
+    std::string badPath = testTmpPath("mcp_dump_memory_missing_dir/dump.bin");
+    auto bad = f.mcp.callTool("debug_dump_memory", {{"path", badPath}});
+    CHECK(isErrorContent(bad), "unwritable path reports an error");
+    auto badData = parseTextAsJson(bad);
+    CHECK(badData["error_code"] == "dump_memory_failed", "error_code is dump_memory_failed");
+    CHECK(!testFileExists(badPath), "no dump file created");
+    CHECK(!testFileExists(badPath + ".tmp"), "no .tmp litter left behind");
     TEST_END();
 }
 
@@ -1513,7 +1638,7 @@ void test_mcp_get_server_info() {
     CHECK(!data["gitHash"].get<std::string>().empty(), "gitHash non-empty");
     CHECK(data["buildSeq"].get<int>() >= 0, "buildSeq numeric");
     CHECK(!data["buildTime"].get<std::string>().empty(), "buildTime non-empty");
-    CHECK_EQ(data["apiVersion"].get<int>(), 6, "api_version 6");
+    CHECK_EQ(data["apiVersion"].get<int>(), 7, "api_version 7");
     CHECK(data["pid"].get<int>() > 1, "pid plausible");
     CHECK(!data["startedAt"].get<std::string>().empty(), "startedAt non-empty");
     TEST_END();
@@ -1550,6 +1675,9 @@ int main()
     // Memory
     test_debug_read_memory();
     test_debug_write_memory();
+    test_debug_dump_memory_full();
+    test_debug_dump_memory_range();
+    test_debug_dump_memory_errors();
 
     // I/O
     test_debug_read_io();

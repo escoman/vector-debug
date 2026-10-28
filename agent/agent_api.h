@@ -50,6 +50,16 @@ public:
     AgentApiResult<std::vector<uint8_t>> readMemory(uint16_t address, size_t size);
     AgentApiResult<void> writeMemory(uint16_t address, const std::vector<uint8_t> &data);
 
+    // Write a raw binary dump of a memory range (default: the full 64K address
+    // space, 0x0000..0xFFFF) to 'path'.  The bytes go straight to disk instead
+    // of through the JSON transport, so a full-memory dump is never truncated
+    // and never has to be assembled from debug_read_memory_range chunks.  The
+    // result carries the digest of the dumped bytes for after-the-fact
+    // verification.
+    AgentApiResult<MemoryDumpResult> dumpMemory(const std::string &path,
+                                                uint16_t address = 0x0000,
+                                                size_t length = 0x10000);
+
     // -- I/O ports (Stage 6.3: uniform AgentApiResult) -----------------------
 
     AgentApiResult<uint8_t> readIo(uint8_t port);

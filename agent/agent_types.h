@@ -622,6 +622,22 @@ struct LoadRomResult
 };
 
 // ---------------------------------------------------------------------------
+// MemoryDumpResult
+//
+// Structured result of dumpMemory(): a raw binary dump of a memory range
+// written to disk.  The bytes stay in the file — only this metadata travels
+// back to the caller, so a full 64K dump is never truncated by a transport.
+// ---------------------------------------------------------------------------
+
+struct MemoryDumpResult
+{
+    std::string path;              // file the dump was written to
+    uint16_t    startAddress = 0;  // first address covered by the dump
+    uint32_t    length = 0;        // bytes written
+    std::string sha256;            // hex digest of the dumped bytes
+};
+
+// ---------------------------------------------------------------------------
 // DebugStateResult — Stage 6.1 (§21)
 //
 // High-level debugger state from getDebugState().

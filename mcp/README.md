@@ -40,7 +40,7 @@ Example Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
-## MCP Tools (76 tools)
+## MCP Tools (87 tools)
 
 All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi method.
 
@@ -48,7 +48,8 @@ All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi meth
 > not hardcode the count. Machine-readable capability marker: `v06c.api_version` in the
 > `initialize` result (2 = Stage 6.26 batch analysis tools, 3 = Stage 6.27 raster/beam
 > debugging tools, 4 = `debug_get_server_info` build provenance, 5 = RST 7 / INT log,
-> 6 = Stage 6.28 RDB knowledge tools — protocol / ports / watchlist). The grouped tables below were
+> 6 = Stage 6.28 RDB knowledge tools — protocol / ports / watchlist,
+> 7 = `debug_dump_memory` raw binary memory dump). The grouped tables below were
 > written for Stage 6.4 and do not list every tool added in Stages 6.11–6.25; the
 > Stage 6.26 batch tools and Stage 6.27 raster/beam tools are documented at the end of
 > this section.
@@ -69,11 +70,12 @@ All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi meth
 | `debug_get_registers` | Get formatted register summary (AF, BC, DE, HL) |
 | `debug_set_register` | Set a register value by name |
 
-### Memory (2)
+### Memory (3)
 | Tool | Description |
 |---|---|
 | `debug_read_memory` | Read bytes from memory |
 | `debug_write_memory` | Write bytes to memory |
+| `debug_dump_memory` | Dump a memory range (default: full 64K `0x0000..0xFFFF`) to a raw binary file; returns `{path, address, length, sha256}` instead of the bytes |
 
 ### I/O (2)
 | Tool | Description |
@@ -229,7 +231,7 @@ debugger/mcp/
     mcp_json.h/cpp       — JSON serialization for Agent API types
     mcp_main.cpp         — v06c-mcp entry point (headless with real Board)
     tests/
-        test_mcp_protocol.cpp — 60 tests (Stage 6.4.1 … 6.27)
+        test_mcp_protocol.cpp — 69 tests (Stage 6.4.1 … 6.28 + debug_dump_memory)
     README.md
 
 debugger/thirdparty/cpp-mcp/ — cpp-mcp library (MIT, hkr04/cpp-mcp)
@@ -290,8 +292,8 @@ make test_mcp_protocol
 ./test_mcp_protocol
 ```
 
-60 tests covering (Stage 6.4.1 … 6.27):
-- Tool registration (all 73 tools, unique names — tools/list reflects reality)
+69 tests covering (Stage 6.4.1 … 6.28):
+- Tool registration (all 87 tools, unique names — tools/list reflects reality)
 - Schema validation (types, required params, numeric constraints)
 - Tool execution (via MockAgentBackend)
 - Error propagation (AgentApiResult → MCP error)
@@ -299,6 +301,7 @@ make test_mcp_protocol
 - End-to-end (MCP → AgentApi → Mock → JSON)
 - JSON serialization format
 - I/O port boundaries
+- `debug_dump_memory` — file content, size, sha256, range dumps, error paths
 
 ### Integration (real ROMs, real server)
 
@@ -327,11 +330,11 @@ scenario is gated on `V06C_FIRE3_ROM`. Missing ROMs or server binary → `SKIP`,
 All existing tests must pass:
 
 ```bash
-./test_agent_api          # 115 tests (incl. Stage 6.27 beam/screen/raster)
+./test_agent_api          # 122 tests (incl. Stage 6.27 beam/screen/raster)
 ./test_agent_commands     # 15 tests
 ./test_agent_contract     # 49 tests
 ./test_agent_integration  # 51 tests
-./test_mcp_protocol       # 60 tests (Stage 6.4.1 … 6.27)
+./test_mcp_protocol       # 69 tests (Stage 6.4.1 … 6.28)
 ```
 
 All `test_*` binaries in the build directory must pass.

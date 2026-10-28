@@ -6,12 +6,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <vector>
 #include <string>
 
 #include "agent_api.h"
 #include "mock_backend_for_agent.h"
 #include "test_tmp_dir.h"
+#include "sha256.h"   // digest verification of the dumped bytes
 
 // ---------------------------------------------------------------------------
 // Test framework
@@ -191,6 +194,98 @@ static void test_write_memory()
     CHECK_EQ(0xAAu, (unsigned)readResult.value[0], "byte 0");
     CHECK_EQ(0xBBu, (unsigned)readResult.value[1], "byte 1");
     CHECK_EQ(0xCCu, (unsigned)readResult.value[2], "byte 2");
+    TEST_END();
+}
+
+static void test_dump_memory_full()
+{
+    TEST_BEGIN("dumpMemory writes the full 64K dump to a file");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    std::string dumpPath = testTmpPath("agent_dump_memory_full.bin");
+    testRemoveTree(dumpPath);
+
+    auto r = api.dumpMemory(dumpPath);
+    CHECK(r.success, "dump succeeds");
+    CHECK_STR(dumpPath, r.value.path, "path echoed");
+    CHECK_EQ(0x0000u, (unsigned)r.value.startAddress, "default start address");
+    CHECK_EQ(0x10000u, r.value.length, "default length is 64K");
+
+    std::ifstream file(dumpPath, std::ios::binary);
+    CHECK(file.is_open(), "dump file readable");
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    CHECK_EQ(0x10000u, (unsigned)bytes.size(), "file holds 65536 bytes");
+    if (bytes.size() >= 0x0103) {
+        CHECK_EQ(0x31u, (unsigned)bytes[0x0100], "0x0100 = LXI SP opcode");
+        CHECK_EQ(0xF8u, (unsigned)bytes[0x0102], "0x0102 = LXI SP high byte");
+    }
+    CHECK_EQ(64u, (unsigned)r.value.sha256.size(), "sha256 hex length");
+    CHECK_STR(Sha256::bufferDigest(bytes.data(), bytes.size()), r.value.sha256,
+              "sha256 matches file content");
+
+    testRemoveTree(dumpPath);
+    TEST_END();
+}
+
+static void test_dump_memory_range()
+{
+    TEST_BEGIN("dumpMemory dumps an explicit range");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    std::string dumpPath = testTmpPath("agent_dump_memory_range.bin");
+    testRemoveTree(dumpPath);
+
+    auto r = api.dumpMemory(dumpPath, 0x0100, 4);
+    CHECK(r.success, "range dump succeeds");
+    CHECK_EQ(0x0100u, (unsigned)r.value.startAddress, "start address");
+    CHECK_EQ(4u, r.value.length, "length");
+
+    std::ifstream file(dumpPath, std::ios::binary);
+    CHECK(file.is_open(), "dump file readable");
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    CHECK_EQ(4u, (unsigned)bytes.size(), "4 bytes dumped");
+    // LXI SP,0xF800 (31 00 F8) + MVI A,0x55 (3E)
+    const uint8_t expected[] = {0x31, 0x00, 0xF8, 0x3E};
+    CHECK(bytes.size() == sizeof(expected) &&
+              memcmp(bytes.data(), expected, sizeof(expected)) == 0,
+          "dumped bytes match memory");
+
+    // The file dump and readMemory agree byte-for-byte
+    auto readResult = api.readMemory(0x0100, 4);
+    CHECK(readResult.success && readResult.value == bytes, "dump equals readMemory bytes");
+
+    testRemoveTree(dumpPath);
+    TEST_END();
+}
+
+static void test_dump_memory_errors()
+{
+    TEST_BEGIN("dumpMemory rejects invalid arguments");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto emptyPath = api.dumpMemory("", 0x0000, 0x1000);
+    CHECK(!emptyPath.success, "empty path fails");
+    CHECK(emptyPath.error_code == ErrorCode::InvalidArgument, "empty path -> InvalidArgument");
+
+    auto zeroLen = api.dumpMemory(testTmpPath("agent_dump_memory_zero.bin"), 0x0100, 0);
+    CHECK(!zeroLen.success, "zero length fails");
+    CHECK(zeroLen.error_code == ErrorCode::InvalidRange, "zero length -> InvalidRange");
+
+    auto overflow = api.dumpMemory(testTmpPath("agent_dump_memory_overflow.bin"), 0xF000, 0x2000);
+    CHECK(!overflow.success, "address+length beyond 64K fails");
+    CHECK(overflow.error_code == ErrorCode::InvalidRange, "overflow -> InvalidRange");
+
+    std::string badPath = testTmpPath("agent_dump_memory_missing_dir/dump.bin");
+    auto bad = api.dumpMemory(badPath);
+    CHECK(!bad.success, "unwritable destination fails");
+    CHECK(bad.error_code == ErrorCode::OperationFailed, "unwritable -> OperationFailed");
+    CHECK(!testFileExists(badPath), "no dump file created");
+    CHECK(!testFileExists(badPath + ".tmp"), "no .tmp litter left behind");
     TEST_END();
 }
 
@@ -2399,6 +2494,9 @@ int main()
     // Memory access
     test_read_memory();
     test_write_memory();
+    test_dump_memory_full();
+    test_dump_memory_range();
+    test_dump_memory_errors();
 
     // I/O ports (Stage 6.1 Iteration 3)
     test_read_io();

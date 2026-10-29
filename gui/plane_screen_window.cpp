@@ -1,6 +1,5 @@
 #include "plane_screen_window.h"
 #include "idebug_backend.h"
-#include "events.h"
 
 // Dear ImGui
 #include "imgui.h"
@@ -58,22 +57,15 @@ void PlaneScreenWindow::buildPlanePixels(IDebugBackend &backend)
 
     const uint8_t *vram = snapshot.data.data();
 
-    // Update access times from memory history (for live mode)
+    // Live activity: per-byte wall-clock timestamps straight from the backend,
+    // i.e. the same source the Memory Map uses.  Nothing is cached here, so a
+    // highlight fades on its own once the accesses stop — including while the
+    // emulator is paused — and no state can survive Reset or a ROM load.  Only
+    // the current plane's 8 KB are fetched, not the whole event ring.
+    std::vector<IDebugBackend::ByteActivityState> activity;
     if (liveMode_) {
-        auto events = backend.memoryHistorySnapshot();
-        auto now = std::chrono::steady_clock::now();
-        for (const auto &evt : events) {
-            uint16_t addr = evt.virt;
-            // Only track accesses within current plane's range
-            if (addr >= base && addr < base + 8192) {
-                auto &times = accessTimes_[addr];
-                if (evt.type == MemoryAccessType::Read || evt.type == MemoryAccessType::Fetch) {
-                    times.lastRead = now;
-                } else if (evt.type == MemoryAccessType::Write) {
-                    times.lastWrite = now;
-                }
-            }
-        }
+        activity = backend.byteActivitySnapshot(base, 8192);
+        if (activity.size() != 8192) activity.clear();
     }
 
     int stride = currentStride();
@@ -96,11 +88,16 @@ void PlaneScreenWindow::buildPlanePixels(IDebugBackend &backend)
     // Read+Write: yellow
     static constexpr uint32_t kBothSet    = 0xFFE0E040;  // bright yellow
     static constexpr uint32_t kBothUnset  = 0xFF404020;  // dark yellow
+    // Fetch (code execution in this plane, opt-in): blue
+    static constexpr uint32_t kFetchSet   = 0xFF4090E0;  // bright blue
+    static constexpr uint32_t kFetchUnset = 0xFF202838;  // dark blue
 
     auto now = std::chrono::steady_clock::now();
+    // byteActivityRecent() rejects the TimePoint::min() "never accessed" sentinel
+    // before doing the subtraction; without that check the difference overflows
+    // and every untouched byte would look active.
     auto isActive = [&](std::chrono::steady_clock::time_point tp) -> bool {
-        if (tp == std::chrono::steady_clock::time_point()) return false;
-        return (now - tp) < ACTIVITY_DURATION;
+        return IDebugBackend::byteActivityRecent(tp, now, ACTIVITY_DURATION);
     };
 
     // Resize pixel buffer if texture dimensions changed (zoom changed).
@@ -128,15 +125,14 @@ void PlaneScreenWindow::buildPlanePixels(IDebugBackend &backend)
                 int byteCol = pixelX / 8;
                 int bit     = 7 - (pixelX % 8);
                 int vramOffset = byteCol * 256 + byteRow;
-                uint16_t vramAddr = base + vramOffset;
                 uint8_t byteVal = vram[vramOffset];
                 bool pixelSet = (byteVal >> bit) & 1;
 
-                if (liveMode_) {
-                    // Check access times for this VRAM byte
-                    auto it = accessTimes_.find(vramAddr);
-                    bool readActive = (it != accessTimes_.end()) && isActive(it->second.lastRead);
-                    bool writeActive = (it != accessTimes_.end()) && isActive(it->second.lastWrite);
+                if (liveMode_ && !activity.empty()) {
+                    const auto &state = activity[vramOffset];
+                    bool readActive  = isActive(state.lastDataRead);
+                    bool writeActive = isActive(state.lastWrite);
+                    bool fetchActive = showFetches_ && isActive(state.lastFetch);
 
                     if (readActive && writeActive) {
                         color = pixelSet ? kBothSet : kBothUnset;
@@ -144,6 +140,8 @@ void PlaneScreenWindow::buildPlanePixels(IDebugBackend &backend)
                         color = pixelSet ? kReadSet : kReadUnset;
                     } else if (writeActive) {
                         color = pixelSet ? kWriteSet : kWriteUnset;
+                    } else if (fetchActive) {
+                        color = pixelSet ? kFetchSet : kFetchUnset;
                     } else {
                         color = pixelSet ? kColorSet : kColorUnset;
                     }
@@ -275,11 +273,16 @@ void PlaneScreenWindow::renderToolbar()
     ImGui::SameLine();
     ImGui::Text("|");
     ImGui::SameLine();
-    if (ImGui::Checkbox("Live", &liveMode_)) {
-        // Clear access times when toggling live mode
-        if (!liveMode_) {
-            accessTimes_.clear();
-        }
+    ImGui::Checkbox("Live", &liveMode_);
+
+    // Fetch display: off by default, a fetch is not a data read
+    ImGui::SameLine();
+    if (!liveMode_) ImGui::BeginDisabled();
+    ImGui::Checkbox("Fetch", &showFetches_);
+    if (!liveMode_) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Colour bytes fetched as code (opcode/operand) — blue.\n"
+                          "Off by default: a fetch is execution, not a data read.");
     }
 }
 

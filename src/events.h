@@ -90,6 +90,12 @@ struct MemoryStats
     using Clock = std::chrono::steady_clock;
     using TimePoint = std::chrono::steady_clock::time_point;
 
-    TimePoint lastReadTime;
+    TimePoint lastReadTime;   // any read, fetches included (Memory Map)
     TimePoint lastWriteTime;
+
+    // Split of lastReadTime for the VRAM Planes window: reading an opcode or
+    // an operand byte is code execution, not a data access, and the two must
+    // not share one colour.  Both stay at TimePoint::min() until they happen.
+    TimePoint lastDataReadTime;
+    TimePoint lastFetchTime;
 };

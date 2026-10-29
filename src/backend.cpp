@@ -54,6 +54,8 @@ struct DebugBackend::Impl
             memStats[i].lastWriteSequence = UINT64_MAX;
             memStats[i].lastReadTime = TimePoint::min();
             memStats[i].lastWriteTime = TimePoint::min();
+            memStats[i].lastDataReadTime = TimePoint::min();
+            memStats[i].lastFetchTime = TimePoint::min();
         }
     }
 };
@@ -137,6 +139,10 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     clearHistory();
     instructionSequence_ = 0;
     freeRunSequenceStarted_ = false;
+
+    // Per-address statistics belong to the machine that produced them; a new
+    // ROM must not be painted with the previous program's activity.
+    impl_->clearStats();
 
     // Stage 6.20.1: Clear breakpoints from previous ROM session.
     // Breakpoints belong to the debug session, not the ROM —
@@ -836,7 +842,14 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
     uint16_t addr = ev.virt;
     impl_->memStats[addr].reads++;
     impl_->memStats[addr].lastReadSequence = instructionSequence_;
-    impl_->memStats[addr].lastReadTime = MemoryStats::Clock::now();
+    const MemoryStats::TimePoint now = MemoryStats::Clock::now();
+    impl_->memStats[addr].lastReadTime = now;
+    // Keep data reads and fetches apart: the VRAM Planes window colours them
+    // differently, and a fetch is code execution, not a data access.
+    if (isFetch)
+        impl_->memStats[addr].lastFetchTime = now;
+    else
+        impl_->memStats[addr].lastDataReadTime = now;
 
     // Stage 6.20: Runtime Memory Access Map accumulation
     {
@@ -1020,6 +1033,24 @@ std::vector<MemoryStats> DebugBackend::memoryStatsSnapshot() const
 {
     return std::vector<MemoryStats>(
         impl_->memStats, impl_->memStats + 65536);
+}
+
+std::vector<IDebugBackend::ByteActivityState>
+DebugBackend::byteActivitySnapshot(uint16_t start, size_t size) const
+{
+    std::vector<ByteActivityState> out;
+    if (size == 0) return out;
+    if (static_cast<size_t>(start) + size > 0x10000u)
+        size = 0x10000u - start;
+
+    out.resize(size);
+    for (size_t i = 0; i < size; ++i) {
+        const MemoryStats &st = impl_->memStats[start + i];
+        out[i].lastDataRead = st.lastDataReadTime;
+        out[i].lastWrite    = st.lastWriteTime;
+        out[i].lastFetch    = st.lastFetchTime;
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------

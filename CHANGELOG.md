@@ -22,6 +22,20 @@ Prepend new versions at the top; keep this first HTML comment free of `## [` lin
   the SHA-256 digest lets a caller verify the file afterwards. Bumps `v06c.api_version`
   to 7.
 
+### Fixed
+- VRAM Planes Live mode no longer reports code execution as a data read, and its
+  highlight is now truthful. Opcode/operand fetches moved to an opt-in blue `Fetch`
+  layer (off by default) instead of sharing the green "read" colour, and both the
+  highlight and its 500 ms fade come from the per-byte wall-clock counters the Memory
+  Map already uses, so they age out while the emulator is paused and the two views
+  agree. The window keeps no state of its own — `Reset`, a ROM load and
+  `clearHistory()` cannot leave stale activity behind — and the per-frame cost shrank
+  from a copy of up to 50 000 ring-buffer events to the 8 KB of the visible plane.
+  Fixed along the way: bytes nothing had touched were painted as *read*, because the
+  age check compared against `time_point()` while the backend marks "never accessed"
+  with `time_point::min()`, so the subtraction overflowed int64 nanoseconds and
+  wrapped negative, which reads as "just happened".
+
 ## [0.6.7] - 2026-10-24
 
 Trustworthy screen snapshots when the debugger stops inside a frame: `debug_get_screen_snapshot`

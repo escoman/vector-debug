@@ -1404,6 +1404,93 @@ static void test_fetch_verification()
 }
 
 // ---------------------------------------------------------------------------
+// Live byte activity — source of the VRAM Planes window
+//
+// The window colours a byte by "read / write / both" using these timestamps.
+// A fetch is code execution, not a data read: keeping lastFetch separate is
+// what stops a fetched byte from being reported as read.
+// ---------------------------------------------------------------------------
+
+static void test_byte_activity_snapshot()
+{
+    TEST_BEGIN("Live byte activity: data read vs fetch vs write");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // 0000: 21 00 D0   LXI H, D000   (3 fetched bytes at 0000..0002)
+    // 0003: 7E         MOV A, M      (1 fetch + data read of D000)
+    // 0004: 32 00 C0   STA C000      (3 fetches + data write of C000)
+    static const uint8_t rom[] = {
+        0x21, 0x00, 0xD0,
+        0x7E,
+        0x32, 0x00, 0xC0,
+    };
+    std::vector<uint8_t> rom_vec(rom, rom + sizeof(rom));
+    mem.init_from_vector(rom_vec, 0);
+    mem.write(0xD000, 0x5A, false);
+
+    dbg->reset();
+    for (int i = 0; i < 3; ++i) dbg->stepInstruction();
+
+    using TP = std::chrono::steady_clock::time_point;
+    const TP never = TP::min();
+
+    auto dataByte = dbg->byteActivitySnapshot(0xD000, 1);
+    CHECK_EQ(1u, (unsigned)dataByte.size(), "snapshot covers requested range");
+    CHECK(dataByte[0].lastDataRead != never, "D000: data read timestamped");
+    CHECK(dataByte[0].lastFetch == never,    "D000: never fetched");
+    CHECK(dataByte[0].lastWrite == never,    "D000: never written");
+
+    auto written = dbg->byteActivitySnapshot(0xC000, 1);
+    CHECK(written[0].lastWrite != never,    "C000: write timestamped");
+    CHECK(written[0].lastDataRead == never, "C000: not reported as data read");
+
+    auto opcode = dbg->byteActivitySnapshot(0x0003, 1);
+    CHECK(opcode[0].lastFetch != never,    "0003: opcode fetch timestamped");
+    CHECK(opcode[0].lastDataRead == never, "0003: a fetch is not a data read");
+
+    // The timestamps feed a 500 ms highlight, so they must be wall clock.
+    const auto now = std::chrono::steady_clock::now();
+    CHECK(now - dataByte[0].lastDataRead < std::chrono::seconds(5),
+          "D000 read timestamp is current");
+
+    // Reset clears the activity at its source: the window keeps no state.
+    dbg->reset();
+    auto afterReset = dbg->byteActivitySnapshot(0xD000, 16);
+    bool allClear = !afterReset.empty();
+    for (const auto &s : afterReset) {
+        if (s.lastDataRead != never || s.lastWrite != never || s.lastFetch != never)
+            allClear = false;
+    }
+    CHECK(allClear, "reset clears per-byte activity");
+
+    // Range is clamped at the top of the address space.
+    auto tail = dbg->byteActivitySnapshot(0xFFF0, 0x100);
+    CHECK_EQ(0x10u, (unsigned)tail.size(), "range clamped at 0x10000");
+
+    // The 500 ms highlight helper must treat the "never accessed" sentinel as
+    // inactive.  Subtracting TimePoint::min() from now overflows the int64
+    // nanosecond counter and wraps negative, which compares as "recent" -- that
+    // turned every untouched byte of a plane green.
+    const auto window = std::chrono::milliseconds(500);
+    const auto nowTp = std::chrono::steady_clock::now();
+    CHECK(!IDebugBackend::byteActivityRecent(TP::min(), nowTp, window),
+          "never-accessed sentinel is inactive");
+    CHECK(!IDebugBackend::byteActivityRecent(TP(), nowTp, window),
+          "epoch timestamp is inactive");
+    CHECK(IDebugBackend::byteActivityRecent(nowTp, nowTp, window),
+          "just-touched byte is active");
+    CHECK(!IDebugBackend::byteActivityRecent(
+              nowTp - std::chrono::milliseconds(1000), nowTp, window),
+          "byte touched 1 s ago is inactive");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // DebugMemoryAccess tests
 // ---------------------------------------------------------------------------
 
@@ -4949,6 +5036,7 @@ int main()
     test_s42_activity_execute_counter();
     test_s42_activity_read_write_counters();
     test_s42_activity_reset_clears();
+    test_byte_activity_snapshot();
     test_s42_screen_snapshot_no_board();
     test_s627_screen_snapshot_never_tears();
 

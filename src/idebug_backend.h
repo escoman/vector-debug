@@ -203,6 +203,47 @@ public:
 
     virtual LiveActivitySnapshot liveActivitySnapshot() const = 0;
 
+    // -- Live byte activity (VRAM Planes window) ----------------------------
+
+    // Per-byte wall-clock timestamps for a contiguous range, taken from the
+    // same counters that feed liveActivitySnapshot().  A highlight therefore
+    // ages out by the caller's duration even while the CPU is paused, and both
+    // views agree on what happened.
+    //   lastDataRead — data reads only; opcode/operand fetches excluded
+    //   lastWrite    — writes
+    //   lastFetch    — opcode/operand fetches, i.e. code execution
+    struct ByteActivityState
+    {
+        std::chrono::steady_clock::time_point lastDataRead;
+        std::chrono::steady_clock::time_point lastWrite;
+        std::chrono::steady_clock::time_point lastFetch;
+    };
+
+    // Bytes that were never accessed carry time_point::min() -- the same sentinel
+    // MemoryStats uses.  Never subtract that sentinel from a current timestamp:
+    // the int64 nanosecond difference overflows and wraps negative, which reads
+    // as "touched just now" and paints every untouched byte as active.  Compare
+    // through this helper instead of doing the arithmetic by hand.
+    static bool byteActivityRecent(std::chrono::steady_clock::time_point tp,
+                                   std::chrono::steady_clock::time_point now,
+                                   std::chrono::steady_clock::duration window)
+    {
+        using TimePoint = std::chrono::steady_clock::time_point;
+        if (tp == TimePoint::min() || tp == TimePoint()) return false;
+        return (now - tp) < window;
+    }
+
+    // Returns `size` entries for [start, start+size), clamped at 0x10000, or an
+    // empty vector when the backend does not track per-byte activity.  The
+    // default keeps test mocks unchanged.
+    virtual std::vector<ByteActivityState>
+        byteActivitySnapshot(uint16_t start, size_t size) const
+    {
+        (void)start;
+        (void)size;
+        return {};
+    }
+
     // -- Symbols ------------------------------------------------------------
     // Stage 5.3.3: Agent mutations go through Command Queue (request*Symbol methods).
     // GUI may still use mutable reference for direct operations (temporary).

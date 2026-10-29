@@ -186,6 +186,11 @@ public:
 
     LiveActivitySnapshot liveActivitySnapshot() const override;
 
+    // Per-byte live activity for a range (VRAM Planes window).  Reads
+    // impl_->memStats, the same source the Memory Map uses.
+    std::vector<ByteActivityState>
+        byteActivitySnapshot(uint16_t start, size_t size) const override;
+
     // -- IDebugBackend: symbols ---------------------------------------------
 
     SymbolDatabase       &symbolDatabase() override { return symbols_; }

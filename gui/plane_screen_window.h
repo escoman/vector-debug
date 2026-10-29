@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 // Forward declarations
@@ -38,15 +37,14 @@ private:
     // Selected plane (0–3)
     int selectedPlane_ = 0;
 
-    // Live mode: color pixels by recent memory access
+    // Live mode: color pixels by recent memory access.  Timestamps come from
+    // the backend (per-byte wall clock, same source as the Memory Map), so a
+    // highlight ages out even while the CPU is paused.
     bool liveMode_ = false;
 
-    // Track last read/write times per VRAM byte address (for live mode)
-    struct AccessTimes {
-        std::chrono::steady_clock::time_point lastRead;
-        std::chrono::steady_clock::time_point lastWrite;
-    };
-    std::unordered_map<uint16_t, AccessTimes> accessTimes_;
+    // Opcode/operand fetches are code execution, not data reads: they are only
+    // colored when explicitly asked for, and never in the read color.
+    bool showFetches_ = false;
 
     // Activity duration for live mode coloring
     static constexpr auto ACTIVITY_DURATION = std::chrono::milliseconds(500);
